@@ -21,6 +21,7 @@ interface GameCardInfo {
   highestCardIsFoil: boolean
   totalCardsValue: number
   totalCards: number
+  hasCardDrops: boolean
 }
 
 interface ProfileInfo {
@@ -42,48 +43,6 @@ function parseSteamUrl(url: string): { type: 'id' | 'profiles'; value: string } 
   return null
 }
 
-// Helper: Parse profile page HTML to extract profile info
-function parseProfileInfo(html: string): ProfileInfo | null {
-  // Extract g_rgProfileData
-  const profileDataMatch = html.match(
-    /g_rgProfileData\s*=\s*({[^}]+})/
-  )
-  if (!profileDataMatch) return null
-
-  try {
-    const profileData = JSON.parse(profileDataMatch[1])
-    const steamId = profileData.steamid || ''
-    const personaName = profileData.personaname || ''
-    const profileUrl = profileData.url || ''
-
-    // Extract avatar from og:image or image_src
-    const avatarMatch = html.match(
-      /<link rel="image_src" href="([^"]+)"/
-    ) || html.match(
-      /<meta property="og:image" content="([^"]+)"/
-    )
-    const avatarUrl = avatarMatch
-      ? avatarMatch[1].replace('_full.jpg', '_medium.jpg')
-      : ''
-
-    // Extract game count
-    const gameCountMatch = html.match(
-      /Games[^<]*<[^>]*>\s*<[^>]*>\s*(\d+)/
-    )
-    const gameCount = gameCountMatch ? parseInt(gameCountMatch[1]) : 0
-
-    return {
-      steamId,
-      personaName,
-      avatarUrl,
-      profileUrl,
-      gameCount,
-    }
-  } catch {
-    return null
-  }
-}
-
 // Helper: Clean HTML entities and extra text from game names
 function cleanGameName(raw: string): string {
   return raw
@@ -98,11 +57,51 @@ function cleanGameName(raw: string): string {
     .trim()
 }
 
-// Helper: Parse badges page to extract games with trading cards
-function parseBadgesPage(html: string): { appId: number; gameName: string }[] {
-  const games: { appId: number; gameName: string }[] = []
+// Helper: Parse profile page HTML to extract profile info
+function parseProfileInfo(html: string): ProfileInfo | null {
+  const profileDataMatch = html.match(
+    /g_rgProfileData\s*=\s*({[^}]+})/
+  )
+  if (!profileDataMatch) return null
 
-  // Find all gamecard links with their game names
+  try {
+    const profileData = JSON.parse(profileDataMatch[1])
+    const steamId = profileData.steamid || ''
+    const personaName = profileData.personaname || ''
+    const profileUrl = profileData.url || ''
+
+    const avatarMatch = html.match(
+      /<link rel="image_src" href="([^"]+)"/
+    ) || html.match(
+      /<meta property="og:image" content="([^"]+)"/
+    )
+    const avatarUrl = avatarMatch
+      ? avatarMatch[1].replace('_full.jpg', '_medium.jpg')
+      : ''
+
+    // Extract game count from profile
+    const gameCountMatch = html.match(
+      /Games[^<]*<[^>]*>\s*<[^>]*>\s*(\d+)/
+    ) || html.match(/(\d+)\s*games?\s*owned/i)
+    const gameCount = gameCountMatch ? parseInt(gameCountMatch[1]) : 0
+
+    return {
+      steamId,
+      personaName,
+      avatarUrl,
+      profileUrl,
+      gameCount,
+    }
+  } catch {
+    return null
+  }
+}
+
+// Helper: Parse badges page to extract games with trading cards
+function parseBadgesPage(html: string): { appId: number; gameName: string; hasCardDrops: boolean }[] {
+  const games: { appId: number; gameName: string; hasCardDrops: boolean }[] = []
+
+  // Find all gamecard badge rows
   const gamecardPattern =
     /gamecards\/(\d+)\/"[^>]*>[\s\S]*?<div class="badge_title"[^>]*>\s*([\s\S]*?)\s*(&nbsp;|<\/div>)/g
 
@@ -112,14 +111,69 @@ function parseBadgesPage(html: string): { appId: number; gameName: string }[] {
     const gameName = cleanGameName(match[2])
 
     if (appId && gameName) {
-      // Avoid duplicates
       if (!games.some(g => g.appId === appId)) {
-        games.push({ appId, gameName })
+        // Check if this badge row has "card drops remain" text
+        const rowStart = Math.max(0, match.index - 2000)
+        const rowEnd = Math.min(html.length, match.index + 3000)
+        const rowContext = html.substring(rowStart, rowEnd)
+        const hasCardDrops = /card\s+drops?\s+remain/i.test(rowContext)
+
+        games.push({ appId, gameName, hasCardDrops })
       }
     }
   }
 
   return games
+}
+
+// Helper: Fetch all owned games via Steam Web API
+async function fetchOwnedGamesViaAPI(
+  steamId: string,
+  apiKey: string
+): Promise<{ appId: number; gameName: string; playtime: number }[]> {
+  const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamId}&include_appinfo=1&include_played_free_games=1&format=json`
+
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Steam API error: ${response.status}`)
+  }
+
+  const data = await response.json()
+  const games = data?.response?.games || []
+
+  return games.map((g: { appid: number; name: string; playtime_forever: number }) => ({
+    appId: g.appid,
+    gameName: g.name,
+    playtime: g.playtime_forever,
+  }))
+}
+
+// Helper: Check if a game has trading cards by querying the market
+async function checkGameHasCards(appId: number): Promise<boolean> {
+  try {
+    const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=1&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(8000),
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      const total = data.total_count || 0
+      return total > 0
+    }
+  } catch {
+    // ignore
+  }
+  return false
 }
 
 // Helper: Fetch card prices from Steam Market API
@@ -130,7 +184,6 @@ async function fetchCardPrices(
   const cards: CardInfo[] = []
 
   try {
-    // Fetch trading cards sorted by price desc (includes both normal and foil)
     const marketUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=30&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
 
     const response = await fetch(marketUrl, {
@@ -156,7 +209,6 @@ async function fetchCardPrices(
         const iconUrlLarge = assetDesc.icon_url_large || ''
         const isFoil = hashName.includes('(Foil)')
 
-        // Construct image URL
         let imageUrl = ''
         if (iconUrlLarge) {
           imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrlLarge}/62fx62f`
@@ -180,16 +232,14 @@ async function fetchCardPrices(
     console.error(`Error fetching card prices for ${gameName} (${appId}):`, err)
   }
 
-  // Sort by price desc
   cards.sort((a, b) => b.price - a.price)
-
   return cards
 }
 
-// Helper: Process games in batches
+// Helper: Process games in batches with larger concurrency
 async function processGamesInBatches(
-  games: { appId: number; gameName: string }[],
-  batchSize: number = 5
+  games: { appId: number; gameName: string; hasCardDrops?: boolean }[],
+  batchSize: number = 8
 ): Promise<GameCardInfo[]> {
   const results: GameCardInfo[] = []
 
@@ -202,31 +252,59 @@ async function processGamesInBatches(
 
         if (cards.length === 0) return null
 
-        const highestCard = cards[0] // Already sorted by price desc
+        const highestCard = cards[0]
         const totalCardsValue = cards.reduce((sum, c) => sum + c.price, 0)
-
-        // Get game icon URL
-        const gameIconUrl = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`
 
         return {
           appId: game.appId,
           gameName: game.gameName,
-          gameIconUrl,
+          gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
           cards,
           highestCardPrice: highestCard.price,
           highestCardName: highestCard.name,
           highestCardIsFoil: highestCard.isFoil,
           totalCardsValue,
           totalCards: cards.length,
+          hasCardDrops: game.hasCardDrops ?? false,
         } as GameCardInfo
       })
     )
 
     results.push(...batchResults.filter(Boolean) as GameCardInfo[])
 
-    // Small delay between batches to avoid rate limiting
+    // Short delay between batches
     if (i + batchSize < games.length) {
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+  }
+
+  return results
+}
+
+// Helper: Filter games that have trading cards using batch market checks
+async function filterGamesWithCards(
+  games: { appId: number; gameName: string; playtime: number }[],
+  batchSize: number = 10
+): Promise<{ appId: number; gameName: string; hasCardDrops: boolean }[]> {
+  const results: { appId: number; gameName: string; hasCardDrops: boolean }[] = []
+
+  for (let i = 0; i < games.length; i += batchSize) {
+    const batch = games.slice(i, i + batchSize)
+
+    const batchResults = await Promise.all(
+      batch.map(async game => {
+        const hasCards = await checkGameHasCards(game.appId)
+        return hasCards
+          ? { appId: game.appId, gameName: game.gameName, hasCardDrops: game.playtime > 0 }
+          : null
+      })
+    )
+
+    results.push(...batchResults.filter(Boolean) as { appId: number; gameName: string; hasCardDrops: boolean }[])
+
+    // Delay between batches to avoid rate limiting
+    if (i + batchSize < games.length) {
+      await new Promise(resolve => setTimeout(resolve, 400))
     }
   }
 
@@ -236,7 +314,7 @@ async function processGamesInBatches(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { url } = body
+    const { url, apiKey } = body
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json(
@@ -257,7 +335,7 @@ export async function POST(request: NextRequest) {
     // Initialize Z-AI SDK for web reading
     const zai = await ZAI.create()
 
-    // Step 1: Fetch profile page to get profile info
+    // Step 1: Fetch profile page to get profile info + steam64id
     const profilePageUrl =
       parsedUrl.type === 'id'
         ? `https://steamcommunity.com/id/${parsedUrl.value}/`
@@ -276,33 +354,59 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Step 2: Fetch badges page to get games with trading cards
-    const badgesUrl =
-      parsedUrl.type === 'id'
-        ? `https://steamcommunity.com/id/${parsedUrl.value}/badges/`
-        : `https://steamcommunity.com/profiles/${parsedUrl.value}/badges/`
+    let gamesWithCards: { appId: number; gameName: string; hasCardDrops: boolean }[] = []
+    let scanMethod = 'badges'
 
-    const badgesResult = await zai.functions.invoke('page_reader', {
-      url: badgesUrl,
-    })
-
-    let gamesWithCards = parseBadgesPage(badgesResult.data.html)
-
-    // Fetch additional badge pages (check up to page 3 for larger collections)
-    for (let page = 2; page <= 3; page++) {
+    // Step 2: Two scanning methods
+    if (apiKey && typeof apiKey === 'string' && apiKey.trim()) {
+      // METHOD A: Use Steam Web API to get ALL owned games
+      scanMethod = 'api'
       try {
-        const pageResult = await zai.functions.invoke('page_reader', {
-          url: `${badgesUrl}?p=${page}`,
-        })
-        const moreGames = parseBadgesPage(pageResult.data.html)
-        if (moreGames.length === 0) break
-        for (const game of moreGames) {
-          if (!gamesWithCards.some(g => g.appId === game.appId)) {
-            gamesWithCards.push(game)
-          }
+        const allGames = await fetchOwnedGamesViaAPI(profileInfo.steamId, apiKey.trim())
+        console.log(`Steam API returned ${allGames.length} games`)
+
+        // Filter games that have trading cards by checking the market
+        gamesWithCards = await filterGamesWithCards(allGames, 10)
+        console.log(`Found ${gamesWithCards.length} games with trading cards`)
+      } catch (err) {
+        console.error('Steam API error, falling back to badges:', err)
+        // Fall back to badges method
+        scanMethod = 'badges_fallback'
+      }
+    }
+
+    // METHOD B: Use badges page (no API key needed, or fallback from API)
+    if (gamesWithCards.length === 0 || scanMethod.startsWith('badges')) {
+      scanMethod = scanMethod === 'api' ? 'badges' : scanMethod
+      const badgesUrl =
+        parsedUrl.type === 'id'
+          ? `https://steamcommunity.com/id/${parsedUrl.value}/badges/`
+          : `https://steamcommunity.com/profiles/${parsedUrl.value}/badges/`
+
+      const badgesResult = await zai.functions.invoke('page_reader', {
+        url: badgesUrl,
+      })
+
+      gamesWithCards = parseBadgesPage(badgesResult.data.html)
+
+      // Check for more badge pages (up to 10 pages for large collections)
+      for (let page = 2; page <= 10; page++) {
+        try {
+          const pageResult = await zai.functions.invoke('page_reader', {
+            url: `${badgesUrl}?p=${page}`,
+          })
+          const moreGames = parseBadgesPage(pageResult.data.html)
+
+          // Check if this page has new games or is the same page
+          const newGames = moreGames.filter(
+            g => !gamesWithCards.some(existing => existing.appId === g.appId)
+          )
+
+          if (newGames.length === 0) break // No new games = no more pages
+          gamesWithCards.push(...newGames)
+        } catch {
+          break
         }
-      } catch {
-        break // Stop if page fetch fails
       }
     }
 
@@ -311,11 +415,13 @@ export async function POST(request: NextRequest) {
         profile: profileInfo,
         games: [],
         totalGamesWithCards: 0,
+        scanMethod,
+        totalOwnedGames: profileInfo.gameCount,
       })
     }
 
-    // Step 3: Fetch card prices for all games
-    const gameCards = await processGamesInBatches(gamesWithCards, 5)
+    // Step 3: Fetch card prices for all games with cards
+    const gameCards = await processGamesInBatches(gamesWithCards, 8)
 
     // Sort by highest card price descending
     gameCards.sort((a, b) => b.highestCardPrice - a.highestCardPrice)
@@ -324,6 +430,8 @@ export async function POST(request: NextRequest) {
       profile: profileInfo,
       games: gameCards,
       totalGamesWithCards: gameCards.length,
+      scanMethod,
+      totalOwnedGames: profileInfo.gameCount,
     })
   } catch (err) {
     console.error('Steam analysis error:', err)
