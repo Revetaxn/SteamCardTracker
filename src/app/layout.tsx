@@ -14,24 +14,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Z.ai Code Scaffold - AI-Powered Development",
-  description: "Modern Next.js scaffold optimized for AI-powered development with Z.ai. Built with TypeScript, Tailwind CSS, and shadcn/ui.",
-  keywords: ["Z.ai", "Next.js", "TypeScript", "Tailwind CSS", "shadcn/ui", "AI development", "React"],
-  authors: [{ name: "Z.ai Team" }],
+  title: "Steam Kart Takipçi - Trading Card Fiyat Takip",
+  description: "Steam profilinizdeki oyunların trading card fiyatlarını güncel olarak takip edin. En değerli kartları anında görün.",
+  keywords: ["Steam", "Trading Cards", "Foil", "Steam Market", "Kart Fiyat", "SteamDB"],
+  authors: [{ name: "Steam Kart Takipçi" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
-    url: "https://chat.z.ai",
-    siteName: "Z.ai",
+    title: "Steam Kart Takipçi",
+    description: "Steam trading card fiyatlarınızı güncel olarak takip edin",
     type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
   },
 };
 
