@@ -53,7 +53,6 @@ async function fetchWithRetry(
         signal: options.signal || AbortSignal.timeout(20000),
       })
 
-      // On 429 (rate limit) or 5xx, retry with backoff
       if (response.status === 429 || response.status >= 500) {
         if (attempt < maxRetries) {
           const retryAfter = response.headers.get('Retry-After')
@@ -110,7 +109,6 @@ function parseSteamUrl(url: string): { type: 'id' | 'profiles'; value: string } 
   if (idMatch) return { type: 'id', value: idMatch[1] }
   const profileMatch = url.match(/steamcommunity\.com\/profiles\/(\d+)/)
   if (profileMatch) return { type: 'profiles', value: profileMatch[1] }
-  // Also allow raw SteamID64
   if (/^\d{17}$/.test(url.trim())) return { type: 'profiles', value: url.trim() }
   return null
 }
@@ -135,18 +133,13 @@ async function resolveVanityUrl(vanityName: string): Promise<string | null> {
   try {
     const url = `https://steamcommunity.com/id/${vanityName}/`
     const html = await fetchPageHtml(url)
-
-    // Try to extract steamID from profile page data
     const profileDataMatch = html.match(/g_rgProfileData\s*=\s*({[^}]+})/)
     if (profileDataMatch) {
       const profileData = JSON.parse(profileDataMatch[1])
       return profileData.steamid || null
     }
-
-    // Try steamid in meta tags or other patterns
     const steamIdMatch = html.match(/steamid":"(\d{17})"/) || html.match(/"steamid":"(\d+)"/)
     if (steamIdMatch) return steamIdMatch[1]
-
     return null
   } catch {
     return null
@@ -187,10 +180,7 @@ function parseBadgesPage(
   html: string
 ): { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] {
   const games: { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] = []
-
-  // More inclusive pattern: matches any gamecard link on the badges page
   const gamecardPattern = /gamecards\/(\d+)\//g
-
   let match
   const seenAppIds = new Set<number>()
 
@@ -203,46 +193,33 @@ function parseBadgesPage(
     const endPos = Math.min(html.length, match.index + 2000)
     const context = html.substring(startPos, endPos)
 
-    // Extract game name - look for badge_title or similar
     let gameName = ''
     const titleMatch = context.match(/badge_title"[^>]*>\s*([\s\S]*?)\s*(?:&nbsp;|<\/div>)/i)
     if (titleMatch) {
       gameName = cleanGameName(titleMatch[1])
     } else {
-      // Fallback for games with zero progress (might have different HTML)
       const secondaryTitleMatch = context.match(/badge_row_type[^>]*>\s*([\s\S]*?)\s*<\/div>/i)
       if (secondaryTitleMatch) {
         gameName = cleanGameName(secondaryTitleMatch[1]).replace(/Trading Card Badge/i, '').trim()
       }
     }
 
-    // Default name if still not found
     if (!gameName) gameName = `Game ${appId}`
-
-    // Parse "X card drops remaining"
     const dropsMatch = context.match(/(\d+)\s+card\s+drops?\s+remain/i)
     const cardDropsRemaining = dropsMatch ? parseInt(dropsMatch[1]) : 0
-    const hasCardDrops = cardDropsRemaining > 0
-
-    games.push({ appId, gameName, hasCardDrops, cardDropsRemaining })
+    games.push({ appId, gameName, hasCardDrops: cardDropsRemaining > 0, cardDropsRemaining })
   }
-
   return games
 }
 
 // ===== Helper: Parse total page count from badges pagination =====
 function parseBadgesPageCount(html: string): number {
   let maxPage = 1
-
-  // Matches pagination links like "?p=2" or "p=3"
-  // Look specifically for the p= parameter in the badge_page_link elements
   const pageMatches = html.matchAll(/[\?&]p=(\d+)/g)
   for (const m of pageMatches) {
     const p = parseInt(m[1])
     if (p > maxPage && p < 1000) maxPage = p
   }
-
-  // Fallback: look for "Page X of Y" or just a list of numbers in the pager class
   const pagerMatch = html.match(/class="badge_page_link">(\d+)<\/a>/g)
   if (pagerMatch) {
     for (const m of pagerMatch) {
@@ -253,16 +230,12 @@ function parseBadgesPageCount(html: string): number {
       }
     }
   }
-
   return maxPage
 }
 
 // ===== Helper: Parse Steam games page (rgGames JS variable) =====
-function parseSteamGamesPage(
-  html: string
-): { appId: number; gameName: string; playtime: number }[] {
+function parseSteamGamesPage(html: string): { appId: number; gameName: string; playtime: number }[] {
   const games: { appId: number; gameName: string; playtime: number }[] = []
-
   const rgGamesMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
   if (rgGamesMatch) {
     try {
@@ -276,80 +249,14 @@ function parseSteamGamesPage(
           })
         }
       }
-    } catch (err) {
-      console.error('Failed to parse rgGames:', err)
-    }
+    } catch { }
   }
-
   return games
 }
 
-// ===== Helper: Check if games have trading cards via Store API (Bulk-ish) =====
-async function checkGamesForCards(
-  appIds: number[],
-  onProgress?: (current: number, total: number) => void
-): Promise<number[]> {
-  const cardGames: number[] = []
-  const batchSize = 15
-  console.log(`[StoreScan] Starting scan for ${appIds.length} games...`)
-
-  for (let i = 0; i < appIds.length; i += batchSize) {
-    const batch = appIds.slice(i, i + batchSize)
-
-    await Promise.all(batch.map(async (appId) => {
-      let attempts = 0
-      let success = false
-      while (attempts < 2 && !success) {
-        try {
-          const url = `https://store.steampowered.com/api/appdetails?appids=${appId}&filters=categories`
-          const response = await fetch(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-            signal: AbortSignal.timeout(10000)
-          })
-
-          if (response.ok) {
-            const data = await response.json()
-            if (data && data[appId]) {
-              if (data[appId].success && data[appId].data) {
-                const categories = data[appId].data.categories || []
-                const hasCards = categories.some((c: { id: number }) => c.id === 29)
-                if (hasCards) {
-                  console.log(`[StoreScan] AppID ${appId}: Cards FOUND`)
-                  cardGames.push(appId)
-                }
-                success = true
-              } else if (data[appId].success === false) {
-                console.warn(`[StoreScan] AppID ${appId}: Success=false (Rate limit?) - Attempt ${attempts + 1}/2`)
-                await new Promise(resolve => setTimeout(resolve, 1000))
-              }
-            }
-          } else if (response.status === 429) {
-            console.warn(`[StoreScan] 429 Rate Limit hit. Waiting 2s...`)
-            await new Promise(resolve => setTimeout(resolve, 2000))
-          }
-        } catch (err) {
-          console.error(`[StoreScan] AppID ${appId} Error:`, (err as Error).message)
-        }
-        attempts++
-      }
-    }))
-
-    if (onProgress) onProgress(Math.min(i + batchSize, appIds.length), appIds.length)
-    if (i + batchSize < appIds.length) {
-      await new Promise(resolve => setTimeout(resolve, 400))
-    }
-  }
-
-  console.log(`[StoreScan] Finished. Confirmed ${cardGames.length} new card games.`)
-  return cardGames
-}
-
 // ===== Helper: Parse Steam XML games endpoint =====
-function parseSteamXMLGames(
-  html: string
-): { appId: number; gameName: string; playtime: number }[] {
+function parseSteamXMLGames(html: string): { appId: number; gameName: string; playtime: number }[] {
   const games: { appId: number; gameName: string; playtime: number }[] = []
-
   const gamePattern = /<appID>(\d+)<\/appID>[\s\S]*?<name><!\[CDATA\[([^\]]*)\]\]><\/name>/g
   let match
   while ((match = gamePattern.exec(html)) !== null) {
@@ -363,7 +270,6 @@ function parseSteamXMLGames(
       games.push({ appId, gameName, playtime })
     }
   }
-
   if (games.length === 0) {
     const simplePattern = /<appID>(\d+)<\/appID>[\s\S]*?<name>([^<]+)<\/name>/g
     while ((match = simplePattern.exec(html)) !== null) {
@@ -374,24 +280,18 @@ function parseSteamXMLGames(
       }
     }
   }
-
   return games
 }
 
 // ===== Helper: Fetch games directly from Steam API (no key needed) =====
-async function fetchGamesFromSteamAPI(
-  steamId: string
-): Promise<{ appId: number; gameName: string; playtime: number }[]> {
+async function fetchGamesFromSteamAPI(steamId: string): Promise<{ appId: number; gameName: string; playtime: number }[]> {
   try {
     const url = `https://steamcommunity.com/profiles/${steamId}/games/?tab=all`
     const html = await fetchPageHtml(url)
-
     const jsonGames = parseSteamGamesPage(html)
     if (jsonGames.length > 0) return jsonGames
-
     const xmlGames = parseSteamXMLGames(html)
     if (xmlGames.length > 0) return xmlGames
-
     return []
   } catch {
     return []
@@ -399,562 +299,187 @@ async function fetchGamesFromSteamAPI(
 }
 
 // ===== Helper: Fetch ALL owned games via Steam Web API (requires API key) =====
-async function fetchOwnedGamesViaAPI(
-  steamId: string,
-  apiKey: string
-): Promise<{ appId: number; gameName: string; playtime: number }[]> {
-  try {
-    const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamId}&include_appinfo=1&include_played_free_games=1&format=json`
-
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(15000),
-    })
-
-    if (!response.ok) {
-      throw new Error(`Steam API error: ${response.status}`)
-    }
-
-    const data = await response.json()
-    const games = data?.response?.games || []
-
-    return games.map((g: { appid: number; name: string; playtime_forever: number }) => ({
-      appId: g.appid,
-      gameName: cleanGameName(g.name),
-      playtime: g.playtime_forever || 0,
-    }))
-  } catch (err) {
-    console.error('Steam Web API error:', err)
-    throw err
-  }
-}
-
-// ===== Helper: Fetch appIds of games that have trading card badges =====
-// Uses IPlayerService/GetBadges/v1 — returns all badge data in ONE request
-async function fetchCardEligibleAppIds(
-  steamId: string,
-  apiKey: string
-): Promise<Set<number>> {
-  const appIds = new Set<number>()
-  try {
-    const url = `https://api.steampowered.com/IPlayerService/GetBadges/v1/?key=${apiKey}&steamid=${steamId}`
-    const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
-    if (!response.ok) {
-      console.error(`GetBadges API error: ${response.status}`)
-      return appIds
-    }
-    const data = await response.json()
-    const badges: { appid?: number; badgeid?: number }[] = data?.response?.badges || []
-    // Only keep game badges (appid > 0, badgeid === 1 means trading card badge)
-    for (const b of badges) {
-      if (b.appid && b.appid > 0) {
-        appIds.add(b.appid)
-      }
-    }
-    console.log(`[GetBadges] Found ${appIds.size} games with card badges`)
-  } catch (err) {
-    console.error('GetBadges API error:', err)
-  }
-  return appIds
+async function fetchOwnedGamesViaAPI(steamId: string, apiKey: string): Promise<{ appId: number; gameName: string; playtime: number }[]> {
+  const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamId}&include_appinfo=1&include_played_free_games=1&format=json`
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+  if (!response.ok) throw new Error(`Steam API error: ${response.status}`)
+  const data = await response.json()
+  const games = data?.response?.games || []
+  return games.map((g: any) => ({
+    appId: g.appid,
+    gameName: cleanGameName(g.name),
+    playtime: g.playtime_forever || 0,
+  }))
 }
 
 // ===== Helper: Fetch card prices from Steam Market API =====
-async function fetchCardPrices(
-  appId: number,
-  gameName: string
-): Promise<{ normalCards: CardInfo[]; foilCards: CardInfo[]; failed: boolean }> {
-  const normalCards: CardInfo[] = []
-  const foilCards: CardInfo[] = []
-
+async function fetchCardPrices(appId: number, gameName: string): Promise<{ normalCards: CardInfo[]; foilCards: CardInfo[]; failed: boolean }> {
   try {
     const marketUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
-
     const response = await fetchWithRetry(marketUrl, {
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'application/json',
       },
       signal: AbortSignal.timeout(15000),
     }, 2, 1000)
-
-    if (!response.ok) {
-      console.error(`Market API error ${response.status} for ${gameName} (${appId})`)
-      return { normalCards: [], foilCards: [], failed: true }
-    }
-
+    if (!response.ok) return { normalCards: [], foilCards: [], failed: true }
     const data = await response.json()
+    if (!data || data.success === false) return { normalCards: [], foilCards: [], failed: true }
 
-    // Detect soft rate limit: Steam sometimes returns 200 OK with success=false or null
-    if (!data || data.success === false) {
-      console.warn(`[SoftRateLimit] Detected for ${gameName} (${appId}) — data.success=${data?.success}`)
-      return { normalCards: [], foilCards: [], failed: true }
-    }
-
+    const normalCards: CardInfo[] = []
+    const foilCards: CardInfo[] = []
     const results = data.results || []
-    const totalCount = data.total_count || 0
 
-    const processItem = (item: {
-      hash_name?: string
-      name?: string
-      sell_price?: number
-      sell_price_text?: string
-      asset_description?: { icon_url?: string; icon_url_large?: string }
-    }) => {
-      const hashName: string = item.hash_name || ''
-      const name: string = item.name || ''
-      const sellPrice: number = item.sell_price || 0
-      const sellPriceText: string = item.sell_price_text || ''
-      const assetDesc = item.asset_description || {}
-      const iconUrl = assetDesc.icon_url || ''
-      const iconUrlLarge = assetDesc.icon_url_large || ''
-      const isFoil =
-        hashName.includes('(Foil)') ||
-        hashName.includes('Foil Trading Card') ||
-        name.includes('(Foil)') ||
-        name.includes('Foil Trading Card')
-
-      let imageUrl = ''
-      if (iconUrlLarge) {
-        imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrlLarge}/62fx62f`
-      } else if (iconUrl) {
-        imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrl}/62fx62f`
-      }
-
-      const card: CardInfo = {
-        name,
-        price: sellPrice / 100,
-        priceText: sellPriceText,
-        isFoil,
-        imageUrl,
-        hashName,
-      }
-
+    const processItem = (item: any) => {
+      const hashName = item.hash_name || ''
+      const name = item.name || ''
+      const sellPrice = item.sell_price || 0
+      const isFoil = hashName.includes('(Foil)') || name.includes('(Foil)')
       if (name && sellPrice > 0) {
-        if (isFoil) {
-          foilCards.push(card)
-        } else {
-          normalCards.push(card)
+        const card = {
+          name,
+          price: sellPrice / 100,
+          priceText: item.sell_price_text || '',
+          isFoil,
+          imageUrl: `https://community.akamai.steamstatic.com/economy/image/${item.asset_description?.icon_url_large || item.asset_description?.icon_url}/62fx62f`,
+          hashName
         }
+        if (isFoil) foilCards.push(card)
+        else normalCards.push(card)
       }
     }
 
-    for (const item of results) {
-      processItem(item)
-    }
-
-    // Pagination if needed
-    if (totalCount > 100) {
-      // Wait before second page to avoid rate limit
+    results.forEach(processItem)
+    if (data.total_count > 100) {
       await new Promise(resolve => setTimeout(resolve, 500))
-      const secondPageUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=100&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
-      try {
-        const secondResponse = await fetchWithRetry(secondPageUrl, {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            Accept: 'application/json',
-          },
-          signal: AbortSignal.timeout(15000),
-        }, 2, 1000)
-        if (secondResponse.ok) {
-          const secondData = await secondResponse.json()
-          for (const item of secondData.results || []) {
-            processItem(item)
-          }
-        }
-      } catch (err) {
-        console.warn(`Second page fetch failed for ${gameName} (${appId}):`, err)
+      const secondPageUrl = marketUrl.replace('start=0', 'start=100')
+      const secResp = await fetch(secondPageUrl, { signal: AbortSignal.timeout(15000) })
+      if (secResp.ok) {
+        const secData = await secResp.json()
+        if (secData.results) secData.results.forEach(processItem)
       }
     }
-  } catch (err) {
-    console.error(`Error fetching card prices for ${gameName} (${appId}):`, err)
+    normalCards.sort((a, b) => b.price - a.price)
+    foilCards.sort((a, b) => b.price - a.price)
+    return { normalCards, foilCards, failed: false }
+  } catch {
     return { normalCards: [], foilCards: [], failed: true }
   }
-
-  normalCards.sort((a, b) => b.price - a.price)
-  foilCards.sort((a, b) => b.price - a.price)
-  return { normalCards, foilCards, failed: false }
 }
 
-// ===== Helper: Resolve SteamID from vanity URL or profile URL =====
-async function resolveSteamId(parsedUrl: { type: 'id' | 'profiles'; value: string }): Promise<string | null> {
-  if (parsedUrl.type === 'profiles') {
-    return parsedUrl.value
-  }
-
-  // Vanity URL — need to resolve to SteamID64
-  const resolved = await resolveVanityUrl(parsedUrl.value)
-  return resolved
-}
-
-// ===== Main POST Handler with SSE Streaming =====
+// ===== Main POST Handler =====
 export async function POST(request: NextRequest) {
   const body = await request.json()
   const { url, apiKey } = body
-
-  if (!url || typeof url !== 'string') {
-    return new Response(
-      `data: ${JSON.stringify({ type: 'error', message: 'Steam profil URL\'si gereklidir' })}\n\n`,
-      { status: 400, headers: { 'Content-Type': 'text/event-stream' } }
-    )
-  }
-
   const parsedUrl = parseSteamUrl(url)
-  if (!parsedUrl) {
-    return new Response(
-      `data: ${JSON.stringify({
-        type: 'error',
-        message: 'Geçersiz Steam URL. Format: https://steamcommunity.com/id/kullaniciadi/ veya https://steamcommunity.com/profiles/76561198xxxxxxxxx/',
-      })}\n\n`,
-      { status: 400, headers: { 'Content-Type': 'text/event-stream' } }
-    )
-  }
+  if (!parsedUrl) return new Response(JSON.stringify({ error: 'invalid url' }), { status: 400 })
 
   const encoder = new TextEncoder()
-
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (data: Record<string, unknown>) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
-        } catch {
-          // Controller might be closed
-        }
+      const send = (data: any) => {
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)) } catch { }
       }
 
       try {
-        // ===== Step 1: Fetch profile info using direct HTTP =====
         send({ type: 'status', message: 'Profil bilgileri alınıyor...' })
-
-        const profilePageUrl =
-          parsedUrl.type === 'id'
-            ? `https://steamcommunity.com/id/${parsedUrl.value}/`
-            : `https://steamcommunity.com/profiles/${parsedUrl.value}/`
-
+        const profilePageUrl = parsedUrl.type === 'id' ? `https://steamcommunity.com/id/${parsedUrl.value}/` : `https://steamcommunity.com/profiles/${parsedUrl.value}/`
         const profileHtml = await fetchPageHtml(profilePageUrl)
         const profileInfo = parseProfileInfo(profileHtml)
-
         if (!profileInfo) {
-          send({
-            type: 'error',
-            message: 'Profil bilgileri okunamadı. Profil gizli olabilir veya geçersiz bir URL girdiniz.',
-          })
-          try { controller.close() } catch { }
-          return
+          send({ type: 'error', message: 'Profil bilgileri okunamadı.' })
+          return controller.close()
         }
 
-        // ===== Step 2: Fetch all games — try multiple sources =====
-        let allGames: {
-          appId: number
-          gameName: string
-          hasCardDrops?: boolean
-          cardDropsRemaining?: number
-        }[] = []
-        let scanMethod = 'unknown'
-
-        // --- Source 0: Steam Web API (requires API key) ---
-        let apiOwnedGames: { appId: number; gameName: string; playtime: number }[] = []
-        if (apiKey && typeof apiKey === 'string' && apiKey.trim()) {
-          send({ type: 'status', message: 'Steam Web API ile kütüphane çekiliyor...' })
-          try {
-            apiOwnedGames = await fetchOwnedGamesViaAPI(profileInfo.steamId, apiKey.trim())
-            if (apiOwnedGames.length > 0) {
-              send({ type: 'status', message: `API üzerinden ${apiOwnedGames.length} oyun bulundu.` })
-            }
-          } catch (err) {
-            console.error('Steam Web API failed:', err)
-          }
+        let apiOwnedGames: any[] = []
+        if (apiKey?.trim()) {
+          send({ type: 'status', message: 'Kütüphane çekiliyor...' })
+          try { apiOwnedGames = await fetchOwnedGamesViaAPI(profileInfo.steamId, apiKey.trim()) } catch { }
         }
 
-        // --- Step 2b: Card Discovery via Badges Page (HTML) ---
-        // We always try this because it identifies which games actually have cards
         send({ type: 'status', message: 'Kartlı oyunlar tespit ediliyor...' })
-
-        const badgesUrl =
-          parsedUrl.type === 'id'
-            ? `https://steamcommunity.com/id/${parsedUrl.value}/badges/`
-            : `https://steamcommunity.com/profiles/${parsedUrl.value}/badges/`
-
-        let cardEligibleGames: { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] = []
-
+        const badgesUrl = profilePageUrl + 'badges/'
+        let cardEligibleGames: any[] = []
         try {
-          const firstPageHtml = await fetchPageHtml(badgesUrl)
-          const firstPageGames = parseBadgesPage(firstPageHtml)
-          const detectedPages = parseBadgesPageCount(firstPageHtml)
-
-          const maxPages = Math.max(detectedPages, 1)
-          cardEligibleGames = [...firstPageGames]
-
-          // If we found games, try to scan more pages
-          if (maxPages > 1 || firstPageGames.length >= 10) {
-            const scanDepth = Math.max(maxPages, 50)
-
-            send({
-              type: 'status',
-              message: `Badges sayfaları taranıyor... (Şu an ${cardEligibleGames.length} oyun)`,
-            })
-
-            let consecutiveEmpty = 0
-            for (let page = 2; page <= scanDepth; page++) {
-              try {
-                const pageHtml = await fetchPageHtml(`${badgesUrl}?p=${page}`)
-                const moreGames = parseBadgesPage(pageHtml)
-
-                if (moreGames.length === 0) {
-                  consecutiveEmpty++
-                  if (consecutiveEmpty >= 2 || (page > maxPages && page > 3)) break
-                  continue
-                }
-
-                consecutiveEmpty = 0
-                let newlyAddedCount = 0
-                for (const g of moreGames) {
-                  if (!cardEligibleGames.some(existing => existing.appId === g.appId)) {
-                    cardEligibleGames.push(g)
-                    newlyAddedCount++
-                  }
-                }
-
-                if (newlyAddedCount === 0 && page > maxPages) {
-                  // If we didn't add anything new and we're past the detected page count
-                  break
-                }
-
-                send({
-                  type: 'status',
-                  message: `Badges sayfası ${page} taranıyor... (${cardEligibleGames.length} oyun bulundu)`,
-                })
-              } catch {
-                break
-              }
-            }
+          const bHtml = await fetchPageHtml(badgesUrl)
+          cardEligibleGames = parseBadgesPage(bHtml)
+          const maxP = parseBadgesPageCount(bHtml)
+          for (let p = 2; p <= Math.min(maxP, 50); p++) {
+            const pHtml = await fetchPageHtml(badgesUrl + '?p=' + p)
+            const pGames = parseBadgesPage(pHtml)
+            if (pGames.length === 0) break
+            pGames.forEach(pg => { if (!cardEligibleGames.some(eg => eg.appId === pg.appId)) cardEligibleGames.push(pg) })
           }
-        } catch (err) {
-          console.error('Badges scan failed:', err)
-        }
+        } catch { }
 
-        // --- Final Merge and Library Scanning ---
-        console.log(`[Discovery] Final Merge starting. API games: ${apiOwnedGames.length}, Badge games: ${cardEligibleGames.length}`)
-
-        // Combine games from all sources
-        const libraryMap = new Map<number, string>()
+        console.log(`[Discovery] API: ${apiOwnedGames.length}, Badges: ${cardEligibleGames.length}`)
+        const libraryMap = new Map()
         apiOwnedGames.forEach(g => libraryMap.set(g.appId, g.gameName))
+        cardEligibleGames.forEach(g => libraryMap.set(g.appId, g.gameName))
 
-        // Also add from badges as they have names too
-        cardEligibleGames.forEach(g => {
-          if (!libraryMap.has(g.appId)) libraryMap.set(g.appId, g.gameName)
-        })
+        const candidates = Array.from(libraryMap.keys()).map(appId => ({ appId, gameName: libraryMap.get(appId) }))
+        console.log(`[Discovery] Total candidates: ${candidates.length}`)
 
-        const allLibraryAppIds = Array.from(libraryMap.keys())
-        console.log(`[Discovery] Total unique games in library base: ${allLibraryAppIds.length}`)
+        send({ type: 'status', message: `${candidates.length} oyun tek tek taranıyor...` })
+        const gameCards: any[] = []
+        const failedGames: any[] = []
+        let currentDelay = 250
 
-        // Start with appIDs already confirmed from Badges scan
-        const badgeConfirmedIds = cardEligibleGames.map(g => g.appId)
-        console.log(`[Discovery] Games already confirmed via Badges HTML: ${badgeConfirmedIds.length}`)
-
-        const confirmedCardAppIds = [...badgeConfirmedIds]
-
-        // Only hit Store API for games NOT already found in badges
-        const remainingToScan = allLibraryAppIds.filter(id => !badgeConfirmedIds.includes(id))
-        console.log(`[Discovery] Games to check via Store API scan: ${remainingToScan.length}`)
-
-        if (remainingToScan.length > 0) {
-          const additionalIds = await checkGamesForCards(remainingToScan, (current, total) => {
-            if (current % 50 === 0 || current === total) {
-              send({
-                type: 'status',
-                message: `Kütüphane taranıyor: ${current}/${total} oyun ek kontrol ediliyor...`
-              })
-            }
-          })
-          confirmedCardAppIds.push(...additionalIds)
-          console.log(`[Discovery] Store API scan found ${additionalIds.length} more games with cards.`)
-        }
-
-        // Build the final allGames list
-        allGames = Array.from(new Set(confirmedCardAppIds)).map(appId => ({
-          appId,
-          gameName: libraryMap.get(appId) || `Game ${appId}`,
-          hasCardDrops: true
-        }))
-
-        console.log(`[Discovery] Final combined card-game count: ${allGames.length}`)
-        scanMethod = apiOwnedGames.length > 0 ? 'api_plus_store_scan' : 'badges_plus_store'
-        send({ type: 'status', message: `${allGames.length} kartlı oyun tespit edildi. Fiyatlar alınıyor...` })
-
-        if (allGames.length === 0) {
-          send({
-            type: 'error',
-            message: 'Kartlı oyun bulunamadı. Lütfen profilinizin ve oyun kütüphanenizin halka açık olduğundan emin olun.',
-          })
-          try { controller.close() } catch { }
-          return
-        }
-
-        // ===== Step 3: Fetch card prices for all confirmed games (sequential with adaptive delay) =====
-        send({
-          type: 'progress',
-          current: 0,
-          total: allGames.length,
-          found: 0,
-          message: `Kart fiyatları alınıyor... (0/${allGames.length})`,
-        })
-
-        const gameCards: GameCardInfo[] = []
-        let failedGames: typeof allGames = []
-
-        const processGameResult = (game: typeof allGames[0], normalCards: CardInfo[], foilCards: CardInfo[]): GameCardInfo | null => {
-          if (normalCards.length === 0) return null
-
-          const highestCard = normalCards[0]
-          const totalNormalCardsValue = normalCards.reduce(
-            (sum, c) => sum + c.price,
-            0
-          )
-
-          const cardDropsTotal = Math.ceil(normalCards.length / 2)
-          const avgCardPrice = totalNormalCardsValue / normalCards.length
-          const droppableCardsValue = Math.round(avgCardPrice * cardDropsTotal * 100) / 100
-
-          return {
-            appId: game.appId,
-            gameName: game.gameName,
-            gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
-            normalCards,
-            foilCards,
-            highestCardPrice: highestCard.price,
-            highestCardName: highestCard.name,
-            totalNormalCardsValue,
-            totalNormalCards: normalCards.length,
-            totalFoilCards: foilCards.length,
-            cardDropsTotal,
-            droppableCardsValue,
-            avgCardPrice,
-            hasCardDrops: true,
-          } as GameCardInfo
-        }
-
-        // Sequential processing with adaptive delay
-        let currentDelay = 250 // start fast
-        let consecutiveSuccesses = 0
-
-        for (let i = 0; i < allGames.length; i++) {
-          const game = allGames[i]
-
-          if (i > 0) {
-            await new Promise(resolve => setTimeout(resolve, currentDelay))
+        for (let i = 0; i < candidates.length; i++) {
+          const game = candidates[i]
+          if (i > 0 && i % 20 === 0) {
+            console.log(`[Cooldown] Reached ${i}. Waiting 12s...`)
+            send({ type: 'status', message: 'Steam IP limiti bekletiliyor (12s)...' })
+            await new Promise(r => setTimeout(r, 12000))
+          } else if (i > 0) {
+            await new Promise(r => setTimeout(r, currentDelay))
           }
 
           const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
-
           if (failed) {
+            console.warn(`[Market] FAILED: ${game.gameName}`)
             failedGames.push(game)
-            // Rate limited — slow down significantly
-            currentDelay = 3000
-            consecutiveSuccesses = 0
+            currentDelay = Math.min(3000, currentDelay + 500)
           } else {
-            consecutiveSuccesses++
-            const result = processGameResult(game, normalCards, foilCards)
-            if (result) {
-              gameCards.push(result)
-              send({ type: 'game', data: result })
-            }
-            // Gradually speed up after consecutive successes
-            if (consecutiveSuccesses > 10) {
-              currentDelay = Math.max(200, currentDelay - 50)
-            } else if (consecutiveSuccesses > 5) {
-              currentDelay = Math.max(300, currentDelay - 30)
-            }
-          }
-
-          // Progress update every 5 games
-          if (i % 5 === 0 || i === allGames.length - 1) {
-            send({
-              type: 'progress',
-              current: i + 1,
-              total: allGames.length,
-              found: gameCards.length,
-              message: `Kart fiyatları alınıyor... (${i + 1}/${allGames.length}) — ${gameCards.length} kartlı oyun bulundu`,
-            })
-          }
-        }
-
-        // ===== Step 3b: Retry failed games (up to 3 rounds) =====
-        for (let round = 1; round <= 3 && failedGames.length > 0; round++) {
-          const retryList = [...failedGames]
-          failedGames = []
-
-          send({
-            type: 'status',
-            message: `Başarısız ${retryList.length} oyun yeniden deneniyor (tur ${round}/3)...`,
-          })
-          console.log(`[Retry] Round ${round}: Retrying ${retryList.length} failed games...`)
-
-          // Wait before starting retry round to let rate limit expire
-          await new Promise(resolve => setTimeout(resolve, 5000 * round))
-
-          for (let i = 0; i < retryList.length; i++) {
-            const game = retryList[i]
-            await new Promise(resolve => setTimeout(resolve, 2000))
-
-            try {
-              const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
-              if (failed) {
-                failedGames.push(game)
-              } else {
-                const result = processGameResult(game, normalCards, foilCards)
-                if (result) {
-                  gameCards.push(result)
-                  send({ type: 'game', data: result })
-                }
+            if (normalCards.length > 0) {
+              console.log(`[Market] SUCCESS: ${game.gameName} (${normalCards.length} cards)`)
+              const res = {
+                appId: game.appId,
+                gameName: game.gameName,
+                gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
+                normalCards,
+                foilCards,
+                highestCardPrice: normalCards[0].price,
+                highestCardName: normalCards[0].name,
+                totalNormalCardsValue: normalCards.reduce((s, c) => s + c.price, 0),
+                totalNormalCards: normalCards.length,
+                totalFoilCards: foilCards.length,
+                cardDropsTotal: Math.ceil(normalCards.length / 2),
+                droppableCardsValue: (normalCards.reduce((s, c) => s + c.price, 0) / normalCards.length) * Math.ceil(normalCards.length / 2),
+                avgCardPrice: normalCards.reduce((s, c) => s + c.price, 0) / normalCards.length,
+                hasCardDrops: true
               }
-            } catch (err) {
-              console.error(`[Retry] Failed for ${game.gameName} (${game.appId}):`, err)
-              failedGames.push(game)
+              gameCards.push(res)
+              send({ type: 'game', data: res })
             }
-
-            if (i % 5 === 0 || i === retryList.length - 1) {
-              send({
-                type: 'progress',
-                current: allGames.length,
-                total: allGames.length,
-                found: gameCards.length,
-                message: `Yeniden deneme tur ${round} (${i + 1}/${retryList.length}) — ${gameCards.length} kartlı oyun bulundu`,
-              })
-            }
+            currentDelay = Math.max(250, currentDelay - 50)
           }
-        }
 
-        if (failedGames.length > 0) {
-          console.warn(`[Final] ${failedGames.length} games could not be checked after all retries`)
+          if (i % 5 === 0 || i === candidates.length - 1) {
+            send({ type: 'progress', current: i + 1, total: candidates.length, found: gameCards.length, message: `İşleniyor: ${i + 1}/${candidates.length}` })
+          }
         }
 
         gameCards.sort((a, b) => b.highestCardPrice - a.highestCardPrice)
-
-        // ===== Step 4: Send complete event =====
-        send({
-          type: 'complete',
-          data: {
-            profile: profileInfo,
-            games: gameCards,
-            totalGamesWithCards: gameCards.length,
-            scanMethod,
-            totalOwnedGames: allGames.length,
-          },
-        })
-
-        try { controller.close() } catch { }
+        send({ type: 'complete', data: { profile: profileInfo, games: gameCards, totalGamesWithCards: gameCards.length, totalOwnedGames: candidates.length } })
+        controller.close()
       } catch (err) {
-        console.error('Steam analysis error:', err)
-        try {
-          send({
-            type: 'error',
-            message: 'Profil analiz edilirken bir hata oluştu. Lütfen tekrar deneyin.',
-          })
-        } catch { }
-        try { controller.close() } catch { }
+        console.error(err)
+        send({ type: 'error', message: 'Bir hata oluştu.' })
+        controller.close()
       }
-    },
+    }
   })
 
   return new Response(stream, {
