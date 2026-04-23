@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, AlertCircle, CheckCircle2,
   Globe, User, Gamepad2, Coins, BarChart3, Star,
   LayoutGrid, List, ArrowDownWideArrow, ArrowUpWideArrow,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Layers
 } from 'lucide-react'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -55,16 +55,17 @@ const translations = {
     analyze: 'TARA',
     continue: 'DEVAM ET',
     scanning: 'Taranıyor...',
-    progress: 'Kütüphane İlerlemesi',
+    progress: 'Analiz İlerlemesi',
     potentialProfit: 'Top. Kazanç',
     topFoil: 'Top Foil',
     getKey: 'Anahtar Al',
     noGames: 'Henüz tarama yapılmadı.',
     sortByProfit: 'Kazanca Göre',
     sortByCard: 'Kart Fiyatına Göre',
-    viewGrid: 'Grid Görünüm',
-    viewList: 'Liste Görünüm',
-    page: 'Sayfa'
+    viewGrid: 'Grid',
+    viewList: 'Liste',
+    totalDrops: 'Toplam Düşebilir Kart',
+    cardGames: 'Kartlı Oyunlar'
   },
   en: {
     title: 'STC PLATINUM',
@@ -74,16 +75,17 @@ const translations = {
     analyze: 'SCAN',
     continue: 'CONTINUE',
     scanning: 'Scanning...',
-    progress: 'Library Progress',
+    progress: 'Analysis Progress',
     potentialProfit: 'Total Profit',
     topFoil: 'Top Foil',
     getKey: 'Get Key',
     noGames: 'No games scanned yet.',
     sortByProfit: 'Sort by Profit',
     sortByCard: 'Sort by Card Price',
-    viewGrid: 'Grid View',
-    viewList: 'List View',
-    page: 'Page'
+    viewGrid: 'Grid',
+    viewList: 'List',
+    totalDrops: 'Total Potential Drops',
+    cardGames: 'Card-Eligible Games'
   }
 }
 
@@ -96,12 +98,11 @@ export default function SteamCardTracker() {
   const [error, setError] = useState<string | null>(null)
   const [profile, setProfile] = useState<ProfileInfo | null>(null)
   const [games, setGames] = useState<GameResult[]>([])
-  const [progress, setProgress] = useState<{ current: number, total: number, foundInLib: number } | null>(null)
+  const [progress, setProgress] = useState<{ current: number, total: number, foundInLib: number, cardGames: number, totalPotentialDrops: number } | null>(null)
   const [statusMessage, setStatusMessage] = useState('')
   const [expandedGames, setExpandedGames] = useState<Set<number>>(new Set())
   const [isClient, setIsClient] = useState(false)
 
-  // New States: Grid, Sort, Pagination
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
   const [sortBy, setSortBy] = useState<'profit' | 'card'>('profit')
   const [currentPage, setCurrentPage] = useState(1)
@@ -161,7 +162,9 @@ export default function SteamCardTracker() {
             if (data.type === 'progress') setProgress(p => ({
               current: (isMore ? (p?.current || 0) : 0) + (data.current || 0),
               total: data.total || 0,
-              foundInLib: data.found || 0
+              foundInLib: data.found || 0,
+              cardGames: data.cardGames || 0,
+              totalPotentialDrops: data.totalPotentialDrops || 0
             }))
             if (data.type === 'game') {
               setGames(prev => {
@@ -238,7 +241,7 @@ export default function SteamCardTracker() {
                   <Globe className="w-4 h-4 text-[#4d535b]" />
                   <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t.urlPlaceholder} className="border-none bg-transparent h-full text-sm text-white focus-visible:ring-0 placeholder:text-[#4d535b] p-0 w-48" />
                   <div className="w-px h-6 bg-white/10"></div>
-                  <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={t.apiKeyPlaceholder} className="border-none bg-transparent h-full text-sm text-white focus-visible:ring-0 placeholder:text-[#4d535b] p-0 w-24" />
+                  <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={apiKey ? '••••••••' : t.apiKeyPlaceholder} className="border-none bg-transparent h-full text-sm text-white focus-visible:ring-0 placeholder:text-[#4d535b] p-0 w-24" />
                 </div>
                 <div className="flex gap-2">
                   {loading ? (
@@ -258,25 +261,22 @@ export default function SteamCardTracker() {
 
           {/* DASHBOARD */}
           {progress && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12 animate-in fade-in slide-in-from-top-4 duration-700">
-              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl group relative overflow-hidden">
-                <CardContent className="p-6 relative z-10">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-5 mb-12 animate-in fade-in slide-in-from-top-4 duration-700">
+              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl relative overflow-hidden group">
+                <CardContent className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.progress}</span>
-                    <span className="text-xs font-mono text-[#66c0f4] tracking-tight">{progress.current} / {progress.total}</span>
+                    <span className="text-xs font-mono text-[#66c0f4]">{progress.current} / {progress.total}</span>
                   </div>
                   <Progress value={(progress.current / (progress.total || 1)) * 100} className="h-2 bg-white/5 [&>div]:bg-[#66c0f4] mb-4" />
-
                   {!loading && progress.current < progress.total && (
-                    <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[10px] uppercase tracking-wider rounded-lg shadow-xl shadow-green-500/10">
-                      {progress.total - progress.current} OYUN KALDI - DEVAM ET
+                    <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[9px] uppercase tracking-widest rounded-lg">
+                      DEVAM ET ({progress.total - progress.current} OYUN)
                     </Button>
                   )}
-
                   {loading && (
                     <div className="flex items-center gap-2 text-[9px] font-black uppercase text-[#66c0f4] animate-pulse italic">
-                      <div className="w-1.5 h-1.5 bg-[#66c0f4] rounded-full"></div>
-                      {statusMessage}
+                      <Loader2 className="w-3 h-3 animate-spin" /> {statusMessage}
                     </div>
                   )}
                 </CardContent>
@@ -284,10 +284,21 @@ export default function SteamCardTracker() {
 
               <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
                 <CardContent className="p-6">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">Total Library Access</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.cardGames}</span>
                   <div className="flex items-end gap-3 mt-2">
-                    <div className="text-4xl font-black text-white italic tracking-tighter">{progress.foundInLib}</div>
-                    <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Games Found</div>
+                    <div className="text-4xl font-black text-white italic tracking-tighter">{progress.cardGames}</div>
+                    <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Eligible</div>
+                  </div>
+                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Total Library: {progress.foundInLib}</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
+                <CardContent className="p-6">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.totalDrops}</span>
+                  <div className="flex items-end gap-3 mt-2">
+                    <div className="text-4xl font-black text-white italic tracking-tighter">{progress.totalPotentialDrops}</div>
+                    <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Cards</div>
                   </div>
                 </CardContent>
               </Card>
@@ -325,9 +336,9 @@ export default function SteamCardTracker() {
                 <div className="w-px h-6 bg-white/10"></div>
 
                 <div className="flex items-center gap-2">
-                  <Button onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} disabled={currentPage === 1} variant="ghost" size="icon" className="h-9 w-9 border border-white/5"><ChevronLeft className="w-4 h-4" /></Button>
-                  <span className="text-[10px] font-black text-white uppercase italic">{currentPage} / {totalPages || 1}</span>
-                  <Button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} disabled={currentPage === totalPages} variant="ghost" size="icon" className="h-9 w-9 border border-white/5"><ChevronRight className="w-4 h-4" /></Button>
+                  <Button onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} disabled={currentPage === 1} variant="ghost" size="icon" className="h-9 w-9 border border-white/5 transition-colors hover:bg-white/5"><ChevronLeft className="w-4 h-4" /></Button>
+                  <span className="text-[10px] font-black text-white uppercase italic tracking-widest">{currentPage} / {totalPages || 1}</span>
+                  <Button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} disabled={currentPage === totalPages} variant="ghost" size="icon" className="h-9 w-9 border border-white/5 transition-colors hover:bg-white/5"><ChevronRight className="w-4 h-4" /></Button>
                 </div>
               </div>
             </div>
@@ -343,7 +354,7 @@ export default function SteamCardTracker() {
                     <div className={`relative flex-shrink-0 ${viewMode === 'grid' ? 'w-full aspect-[231/87] rounded-xl overflow-hidden' : 'w-24 h-11 rounded-lg overflow-hidden shadow-2xl'}`}>
                       <img src={game.gameIconUrl} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700" alt="" />
                       <div className="absolute top-1.5 left-1.5 flex gap-1">
-                        <Badge className="bg-black/80 text-[#66c0f4] border-none text-[8px] font-black h-4 px-1.5">{dropCount} DROPS</Badge>
+                        <Badge className="bg-black/90 text-[#66c0f4] border-none text-[8px] font-black h-4 px-1.5">{dropCount} DROPS</Badge>
                       </div>
                     </div>
 
@@ -357,12 +368,12 @@ export default function SteamCardTracker() {
 
                       <div className="flex items-center gap-5 mt-2.5">
                         <div className="flex flex-col">
-                          <span className="text-[9px] font-black text-[#8f98a0] uppercase tracking-widest italic">Drops Value</span>
+                          <span className="text-[9px] font-black text-[#8f98a0] uppercase tracking-widest italic leading-none mb-1">Drops Value</span>
                           <span className="text-sm font-black text-green-400 font-mono tracking-tighter">${game.droppableCardsValue.toFixed(2)}</span>
                         </div>
                         <div className="w-px h-5 bg-white/5"></div>
                         <div className={`flex flex-col ${game.foilCards.length === 0 ? 'opacity-20' : ''}`}>
-                          <span className="text-[9px] font-black text-yellow-500/70 uppercase tracking-widest italic">Foil Price</span>
+                          <span className="text-[9px] font-black text-yellow-500/70 uppercase tracking-widest italic leading-none mb-1">Foil Price</span>
                           <span className="text-sm font-black text-yellow-500 font-mono tracking-tighter">${game.foilCardsValue.toFixed(2)}</span>
                         </div>
                       </div>
