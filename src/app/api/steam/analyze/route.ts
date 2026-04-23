@@ -21,7 +21,7 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
   const found = new Map<number, { name: string, hasCards: boolean, totalCards?: number }>()
   const clean = (s: string) => s.replace(/Steam Card Beta/i, '').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').trim()
 
-  // Tier 1: Web API
+  // Tier 1: Web API (Fast & Professional)
   if (apiKey && steamId64 && apiKey !== 'undefined') {
     try {
       const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamId64}&include_appinfo=1&format=json`
@@ -32,7 +32,7 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
     } catch { }
   }
 
-  // Tier 2: HTML Library Page
+  // Tier 2: HTML Library Page (Fallback)
   try {
     const html = await (await fetchWithTimeout(`${baseUrl}/games/?tab=all`.replace(/\/+/g, '/'))).text()
     const rgMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
@@ -44,7 +44,7 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
     }
   } catch { }
 
-  // Tier 3: XML Library Page
+  // Tier 3: XML Library Page (Fallback)
   try {
     const xml = await (await fetchWithTimeout(`${baseUrl}/games/?xml=1`.replace(/\/+/g, '/'))).text()
     const appIds = [...xml.matchAll(/<appID>(\d+)<\/appID>/g)].map(m => parseInt(m[1]))
@@ -54,7 +54,7 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
     })
   } catch { }
 
-  // Tier 4: Infinite Badge/Card Scraper (THE SOURCE OF TRUTH FOR CARD DROPS)
+  // Tier 4: Badge/Card Scraper (High Accuracy for Started Sets)
   for (let p = 1; p <= 30; p++) {
     try {
       const html = await (await fetchWithTimeout(`${baseUrl}/badges/?p=${p}`.replace(/\/+/g, '/'))).text()
@@ -70,16 +70,37 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
           const name = clean(nameMatch ? nameMatch[1].replace(/<[^>]+>/g, '').trim() : `App ${appId}`)
           const totalCardsInSet = cardSetMatch ? parseInt(cardSetMatch[2]) : 0
 
-          found.set(appId, {
-            name,
-            hasCards: true,
-            totalCards: totalCardsInSet
-          })
+          found.set(appId, { name, hasCards: true, totalCards: totalCardsInSet })
           foundOnPage++
         }
       }
       if (foundOnPage === 0) break
     } catch { break }
+  }
+
+  // Tier 5: UNIVERSAL BULK CATEGORY CHECK (The "Full Coverage" Layer)
+  // Check every game found in library in batches of 50
+  const allAppIds = Array.from(found.keys())
+  for (let i = 0; i < allAppIds.length; i += 50) {
+    const chunk = allAppIds.slice(i, i + 50)
+    try {
+      const resp = await fetchWithTimeout(`https://store.steampowered.com/api/appdetails?appids=${chunk.join(',')}&filters=categories`)
+      const data = await resp.json()
+
+      chunk.forEach(appId => {
+        const app = data[appId.toString()]
+        if (app?.success && app.data?.categories) {
+          // Category ID 8 is "Trading Cards"
+          const hasCards = app.data.categories.some((c: any) => c.id === 8)
+          if (hasCards) {
+            const existing = found.get(appId)!
+            found.set(appId, { ...existing, hasCards: true })
+          }
+        }
+      })
+      // Small cooldown between batches to be safe
+      await delay(500)
+    } catch { }
   }
 
   // Derive final stats from the UNIQUE map entries
@@ -88,9 +109,9 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
   for (const entry of found.values()) {
     if (entry.hasCards) {
       cardEligibleCount++
-      if (entry.totalCards) {
-        totalPotentialDrops += Math.ceil(entry.totalCards / 2)
-      }
+      // If we don't know the exact set size from Tier 4, we assume a safe average of 8 (4 drops)
+      const drops = entry.totalCards ? Math.ceil(entry.totalCards / 2) : 4
+      totalPotentialDrops += drops
     }
   }
 
@@ -152,7 +173,7 @@ export async function POST(req: Request) {
 
   const run = async () => {
     try {
-      send({ type: 'status', message: 'Keşif başlatılıyor...' })
+      send({ type: 'status', message: 'Kütüphane Keşfi & Doğrulama başlatılıyor...' })
 
       let stemId64 = ''
       let baseUrl = ''
@@ -172,7 +193,7 @@ export async function POST(req: Request) {
 
       const discovery = await discoverGames(baseUrl, apiKey, stemId64)
 
-      // The crucial filter: we only market-scan the card-eligible ones
+      // We process only verified card-eligible games
       const filtered = discovery.games.filter(c => !excludedSet.has(c.appId) && c.hasCards)
 
       send({
@@ -190,7 +211,7 @@ export async function POST(req: Request) {
       for (const game of filtered) {
         if (processed >= limit) break
 
-        send({ type: 'status', message: `Pazar Analizi: ${game.gameName}` })
+        send({ type: 'status', message: `Analiz: ${game.gameName}` })
         const prices = await getCardPrices(game.appId)
 
         if (prices && (prices.normalCards.length > 0 || prices.foilCards.length > 0)) {
