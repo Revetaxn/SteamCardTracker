@@ -231,18 +231,24 @@ function parseBadgesPage(
 function parseBadgesPageCount(html: string): number {
   let maxPage = 1
 
-  // Matches ?p=X or page=X or simply numbers in the pagination bar
-  const pageMatches = html.matchAll(/(?:\?p=|page=|\/badges\/)(\d+)/g)
+  // Matches pagination links like "?p=2" or "p=3"
+  // Look specifically for the p= parameter in the badge_page_link elements
+  const pageMatches = html.matchAll(/[\?&]p=(\d+)/g)
   for (const m of pageMatches) {
     const p = parseInt(m[1])
-    if (p > maxPage && p < 200) maxPage = p // Cap at 200 pages to be safe
+    if (p > maxPage && p < 1000) maxPage = p
   }
 
-  // Also check "Page 1 of X" text
-  const ofMatch = html.match(/(\d+)\s+of\s+(\d+)/i)
-  if (ofMatch && ofMatch[2]) {
-    const p = parseInt(ofMatch[2])
-    if (p > maxPage) maxPage = p
+  // Fallback: look for "Page X of Y" or just a list of numbers in the pager class
+  const pagerMatch = html.match(/class="badge_page_link">(\d+)<\/a>/g)
+  if (pagerMatch) {
+    for (const m of pagerMatch) {
+      const pMatch = m.match(/>(\d+)</)
+      if (pMatch) {
+        const p = parseInt(pMatch[1])
+        if (p > maxPage) maxPage = p
+      }
+    }
   }
 
   return maxPage
@@ -611,31 +617,49 @@ export async function POST(request: NextRequest) {
         try {
           const firstPageHtml = await fetchPageHtml(badgesUrl)
           const firstPageGames = parseBadgesPage(firstPageHtml)
-          const maxPages = parseBadgesPageCount(firstPageHtml)
+          const detectedPages = parseBadgesPageCount(firstPageHtml)
 
+          const maxPages = Math.max(detectedPages, 1)
           cardEligibleGames = [...firstPageGames]
 
-          if (maxPages > 1) {
+          // If we found games, try to scan more pages
+          if (maxPages > 1 || firstPageGames.length >= 10) {
+            const scanDepth = Math.max(maxPages, 50)
+
             send({
               type: 'status',
-              message: `Badges sayfası 1/${maxPages} taranıyor... (${cardEligibleGames.length} oyun)`,
+              message: `Badges sayfaları taranıyor... (Şu an ${cardEligibleGames.length} oyun)`,
             })
 
-            for (let page = 2; page <= maxPages; page++) {
+            let consecutiveEmpty = 0
+            for (let page = 2; page <= scanDepth; page++) {
               try {
                 const pageHtml = await fetchPageHtml(`${badgesUrl}?p=${page}`)
                 const moreGames = parseBadgesPage(pageHtml)
-                if (moreGames.length === 0) break
 
+                if (moreGames.length === 0) {
+                  consecutiveEmpty++
+                  if (consecutiveEmpty >= 2 || (page > maxPages && page > 3)) break
+                  continue
+                }
+
+                consecutiveEmpty = 0
+                let newlyAddedCount = 0
                 for (const g of moreGames) {
                   if (!cardEligibleGames.some(existing => existing.appId === g.appId)) {
                     cardEligibleGames.push(g)
+                    newlyAddedCount++
                   }
+                }
+
+                if (newlyAddedCount === 0 && page > maxPages) {
+                  // If we didn't add anything new and we're past the detected page count
+                  break
                 }
 
                 send({
                   type: 'status',
-                  message: `Badges sayfası ${page}/${maxPages} taranıyor... (${cardEligibleGames.length} oyun)`,
+                  message: `Badges sayfası ${page} taranıyor... (${cardEligibleGames.length} oyun bulundu)`,
                 })
               } catch {
                 break
