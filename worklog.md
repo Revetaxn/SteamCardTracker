@@ -61,3 +61,27 @@ Stage Summary:
 - With API key: GetOwnedGames returns ALL games, then Market API checks each for cards
 - Frontend: progress bar, cancel button, API key input, scan method badges, warnings
 - Current/fresh prices from Steam Market API (no caching)
+
+---
+Task ID: 3
+Agent: Main
+Task: Update app to fetch ONLY normal (non-foil) trading cards
+
+Work Log:
+- Updated backend fetchCardPrices to filter out all foil cards (skip cards with (Foil) or Foil Trading Card in hash_name/name)
+- Increased Market API fetch count from 30 to 100 to capture all normal cards for games with many cards
+- Added pagination support for Market API (fetches 2nd page if total_count > 100)
+- Updated highestCardIsFoil to always be false since we only return normal cards
+- Removed foil card section from frontend (no more "Foil Kartlar" section in expanded view)
+- Updated stats label from "Tüm Kartlar Top." to "Tüm Normal Kartlar Top."
+- Updated card count label from "kart" to "normal kart" in game rows
+- Removed ★Foil indicator from highest card display
+- Replaced "Foil Kart Takip" feature highlight with "Normal Kartlar" (Parlak olmayan tüm kartlar)
+- Removed Sparkles import, replaced header badge icon with Coins
+- All calculations (highestCardPrice, totalCardsValue) now based solely on normal (non-foil) cards
+
+Stage Summary:
+- App now fetches and displays ONLY normal (non-foil) trading cards
+- Backend filters out all foil cards before returning data
+- Frontend simplified to single card list per game (no foil/normal split)
+- Sorting and pricing based entirely on normal card values

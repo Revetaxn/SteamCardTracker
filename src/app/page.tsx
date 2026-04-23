@@ -25,7 +25,6 @@ import {
   Coins,
   Zap,
   BarChart3,
-  Sparkles,
   X,
   RefreshCw,
   Key,
@@ -288,7 +287,7 @@ export default function Home() {
             variant="outline"
             className="ml-auto text-[10px] border-[#66c0f4]/30 text-[#66c0f4] hidden sm:inline-flex"
           >
-            <Sparkles className="w-3 h-3 mr-1" />
+            <Coins className="w-3 h-3 mr-1" />
             Kart Fiyat Takip
           </Badge>
         </div>
@@ -512,7 +511,7 @@ export default function Home() {
                     ${totalAllCardsValue.toFixed(2)}
                   </div>
                   <div className="text-[10px] text-[#8f98a0]">
-                    Tüm Kartlar Top.
+                    Tüm Normal Kartlar Top.
                   </div>
                 </CardContent>
               </Card>
@@ -594,8 +593,8 @@ export default function Home() {
                 {sortedGames.map((game, index) => {
                   const rank = getRankBadge(index)
                   const isExpanded = expandedGames.has(game.appId)
-                  const normalCards = game.cards.filter(c => !c.isFoil)
-                  const foilCards = game.cards.filter(c => c.isFoil)
+                  // All cards are normal (non-foil) — filtered in backend
+                  const allCards = game.cards
 
                   return (
                     <Collapsible
@@ -650,16 +649,11 @@ export default function Home() {
                                 </div>
                                 <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                                   <span className="text-[11px] text-[#8f98a0]">
-                                    {game.totalCards} kart
+                                    {game.totalCards} normal kart
                                   </span>
                                   <span className="text-[#2a475e]">•</span>
                                   <span className="text-[11px] text-[#8f98a0] truncate">
                                     En değerli: {game.highestCardName}
-                                    {game.highestCardIsFoil && (
-                                      <span className="text-yellow-400 ml-0.5">
-                                        ★Foil
-                                      </span>
-                                    )}
                                   </span>
                                 </div>
                               </div>
@@ -689,83 +683,40 @@ export default function Home() {
                         <CollapsibleContent>
                           <div className="px-4 pb-4 pt-0">
                             <div className="border-t border-[#2a475e]/30 pt-3 space-y-3">
-                              {/* Normal Cards */}
-                              {normalCards.length > 0 && (
-                                <div>
-                                  <div className="text-[10px] font-semibold text-[#8f98a0] uppercase tracking-wider mb-1.5">
-                                    Normal Kartlar ({normalCards.length})
-                                  </div>
-                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
-                                    {normalCards.map((card, idx) => (
-                                      <div
-                                        key={idx}
-                                        className="flex items-center gap-2 bg-[#2a475e]/20 rounded-md px-2 py-1.5 hover:bg-[#2a475e]/30 transition-colors"
-                                      >
-                                        <img
-                                          src={card.imageUrl}
-                                          alt={card.name}
-                                          className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0"
-                                          loading="lazy"
-                                          onError={e => {
-                                            ;(
-                                              e.target as HTMLImageElement
-                                            ).style.display = 'none'
-                                          }}
-                                        />
-                                        <div className="flex-1 min-w-0">
-                                          <div className="text-[11px] text-[#c7d5e0] truncate">
-                                            {card.name}
-                                          </div>
-                                          <div className="text-[10px] text-green-400 font-medium">
-                                            ${card.price.toFixed(2)}
-                                          </div>
+                              {/* All Normal Cards */}
+                              <div>
+                                <div className="text-[10px] font-semibold text-[#8f98a0] uppercase tracking-wider mb-1.5">
+                                  Normal Kartlar ({allCards.length})
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
+                                  {allCards.map((card, idx) => (
+                                    <div
+                                      key={idx}
+                                      className="flex items-center gap-2 bg-[#2a475e]/20 rounded-md px-2 py-1.5 hover:bg-[#2a475e]/30 transition-colors"
+                                    >
+                                      <img
+                                        src={card.imageUrl}
+                                        alt={card.name}
+                                        className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0"
+                                        loading="lazy"
+                                        onError={e => {
+                                          ;(
+                                            e.target as HTMLImageElement
+                                          ).style.display = 'none'
+                                        }}
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-[11px] text-[#c7d5e0] truncate">
+                                          {card.name}
+                                        </div>
+                                        <div className="text-[10px] text-green-400 font-medium">
+                                          ${card.price.toFixed(2)}
                                         </div>
                                       </div>
-                                    ))}
-                                  </div>
+                                    </div>
+                                  ))}
                                 </div>
-                              )}
-
-                              {/* Foil Cards */}
-                              {foilCards.length > 0 && (
-                                <div>
-                                  <div className="text-[10px] font-semibold text-yellow-400/80 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                                    <Sparkles className="w-3 h-3" />
-                                    Foil Kartlar ({foilCards.length})
-                                  </div>
-                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
-                                    {foilCards.map((card, idx) => (
-                                      <div
-                                        key={idx}
-                                        className="flex items-center gap-2 bg-yellow-500/5 border border-yellow-500/10 rounded-md px-2 py-1.5 hover:bg-yellow-500/10 transition-colors"
-                                      >
-                                        <img
-                                          src={card.imageUrl}
-                                          alt={card.name}
-                                          className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0"
-                                          loading="lazy"
-                                          onError={e => {
-                                            ;(
-                                              e.target as HTMLImageElement
-                                            ).style.display = 'none'
-                                          }}
-                                        />
-                                        <div className="flex-1 min-w-0">
-                                          <div className="text-[11px] text-[#c7d5e0] truncate">
-                                            {card.name}
-                                            <span className="text-yellow-400 ml-0.5">
-                                              ★
-                                            </span>
-                                          </div>
-                                          <div className="text-[10px] text-green-400 font-medium">
-                                            ${card.price.toFixed(2)}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
+                              </div>
 
                               {/* Market Link */}
                               <a
@@ -837,9 +788,9 @@ export default function Home() {
                   desc: 'En karlı kartlar üstte',
                 },
                 {
-                  icon: Sparkles,
-                  label: 'Foil Kart Takip',
-                  desc: 'Normal + Foil kartlar',
+                  icon: Coins,
+                  label: 'Normal Kartlar',
+                  desc: 'Parlak olmayan tüm kartlar',
                 },
               ].map(({ icon: Icon, label, desc }) => (
                 <div

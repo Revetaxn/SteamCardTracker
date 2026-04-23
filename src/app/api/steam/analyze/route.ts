@@ -316,7 +316,7 @@ async function fetchOwnedGamesViaAPI(
   }
 }
 
-// ===== Helper: Fetch card prices from Steam Market API =====
+// ===== Helper: Fetch card prices from Steam Market API (NORMAL CARDS ONLY — no foil) =====
 async function fetchCardPrices(
   appId: number,
   gameName: string
@@ -324,7 +324,9 @@ async function fetchCardPrices(
   const cards: CardInfo[] = []
 
   try {
-    const marketUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=30&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
+    // Fetch only normal trading cards (tag_item_class_2 = trading card)
+    // We'll filter out foil cards from the results
+    const marketUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
 
     const response = await fetch(marketUrl, {
       headers: {
@@ -338,6 +340,7 @@ async function fetchCardPrices(
     if (response.ok) {
       const data = await response.json()
       const results = data.results || []
+      const totalCount = data.total_count || 0
 
       for (const item of results) {
         const hashName: string = item.hash_name || ''
@@ -347,7 +350,14 @@ async function fetchCardPrices(
         const assetDesc = item.asset_description || {}
         const iconUrl = assetDesc.icon_url || ''
         const iconUrlLarge = assetDesc.icon_url_large || ''
-        const isFoil = hashName.includes('(Foil)')
+        const isFoil =
+          hashName.includes('(Foil)') ||
+          hashName.includes('Foil Trading Card') ||
+          name.includes('(Foil)') ||
+          name.includes('Foil Trading Card')
+
+        // Skip foil cards — only return normal cards
+        if (isFoil) continue
 
         let imageUrl = ''
         if (iconUrlLarge) {
@@ -361,10 +371,58 @@ async function fetchCardPrices(
             name,
             price: sellPrice / 100,
             priceText: sellPriceText,
-            isFoil,
+            isFoil: false,
             imageUrl,
             hashName,
           })
+        }
+      }
+
+      // If there are more results than we fetched, paginate to get all normal cards
+      if (totalCount > 100 && cards.length >= 100) {
+        const secondPageUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=100&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
+        const secondResponse = await fetch(secondPageUrl, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            Accept: 'application/json',
+          },
+          signal: AbortSignal.timeout(12000),
+        })
+        if (secondResponse.ok) {
+          const secondData = await secondResponse.json()
+          const secondResults = secondData.results || []
+          for (const item of secondResults) {
+            const hashName: string = item.hash_name || ''
+            const name: string = item.name || ''
+            const sellPrice: number = item.sell_price || 0
+            const sellPriceText: string = item.sell_price_text || ''
+            const assetDesc = item.asset_description || {}
+            const iconUrl = assetDesc.icon_url || ''
+            const iconUrlLarge = assetDesc.icon_url_large || ''
+            const isFoil =
+              hashName.includes('(Foil)') ||
+              hashName.includes('Foil Trading Card') ||
+              name.includes('(Foil)') ||
+              name.includes('Foil Trading Card')
+            if (isFoil) continue
+            let imageUrl = ''
+            if (iconUrlLarge) {
+              imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrlLarge}/62fx62f`
+            } else if (iconUrl) {
+              imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrl}/62fx62f`
+            }
+            if (name && sellPrice > 0) {
+              cards.push({
+                name,
+                price: sellPrice / 100,
+                priceText: sellPriceText,
+                isFoil: false,
+                imageUrl,
+                hashName,
+              })
+            }
+          }
         }
       }
     }
@@ -685,9 +743,10 @@ export async function POST(request: NextRequest) {
           const batchResults = await Promise.all(
             batch.map(async game => {
               const cards = await fetchCardPrices(game.appId, game.gameName)
+              // All cards returned are normal (non-foil) — filtered in fetchCardPrices
               if (cards.length === 0) return null
 
-              const highestCard = cards[0]
+              const highestCard = cards[0] // Already sorted by price desc
               const totalCardsValue = cards.reduce(
                 (sum, c) => sum + c.price,
                 0
@@ -700,7 +759,7 @@ export async function POST(request: NextRequest) {
                 cards,
                 highestCardPrice: highestCard.price,
                 highestCardName: highestCard.name,
-                highestCardIsFoil: highestCard.isFoil,
+                highestCardIsFoil: false, // All cards are normal (non-foil)
                 totalCardsValue,
                 totalCards: cards.length,
                 hasCardDrops: game.hasCardDrops ?? false,
