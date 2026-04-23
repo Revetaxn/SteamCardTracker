@@ -32,29 +32,58 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
     } catch { }
   }
 
-  // Tier 2: HTML Library Page
-  try {
-    const html = await (await fetchWithTimeout(`${baseUrl}/games/?tab=all`.replace(/\/+/g, '/'))).text()
-    const rgMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
-    if (rgMatch) {
-      const gList = JSON.parse(rgMatch[1])
-      gList.forEach((g: any) => {
-        if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name) })
-      })
-    }
-  } catch { }
+  if (found.size < 10) {
+    // Tier 2: HTML Library Page
+    try {
+      const html = await (await fetchWithTimeout(`${baseUrl}/games/?tab=all`.replace(/\/+/g, '/'))).text()
+      const rgMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
+      if (rgMatch) {
+        const gList = JSON.parse(rgMatch[1])
+        gList.forEach((g: any) => {
+          if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name) })
+        })
+      }
+    } catch { }
+  }
 
-  // Tier 3: XML Library Page
-  try {
-    const xml = await (await fetchWithTimeout(`${baseUrl}/games/?xml=1`.replace(/\/+/g, '/'))).text()
-    const appIds = [...xml.matchAll(/<appID>(\d+)<\/appID>/g)].map(m => parseInt(m[1]))
-    const names = [...xml.matchAll(/<name><!\[CDATA\[(.*?)\]\]><\/name>/g)].map(m => m[1])
-    appIds.forEach((id, i) => {
-      if (!found.has(id)) found.set(id, { name: clean(names[i] || `App ${id}`) })
-    })
-  } catch { }
+  if (found.size === 0) {
+    // Tier 3: XML Library Page
+    try {
+      const xml = await (await fetchWithTimeout(`${baseUrl}/games/?xml=1`.replace(/\/+/g, '/'))).text()
+      const appIds = [...xml.matchAll(/<appID>(\d+)<\/appID>/g)].map(m => parseInt(m[1]))
+      const names = [...xml.matchAll(/<name><!\[CDATA\[(.*?)\]\]><\/name>/g)].map(m => m[1])
+      appIds.forEach((id, i) => {
+        if (!found.has(id)) found.set(id, { name: clean(names[i] || `App ${id}`) })
+      })
+    } catch { }
+  }
 
   return Array.from(found.entries()).map(([id, info]) => ({ appId: id, gameName: info.name }))
+}
+
+// ===== BULK CATEGORY CHECK (SAVES MARKET CALLS) =====
+async function getEligibleAppIds(appIds: number[]): Promise<Set<number>> {
+  const eligible = new Set<number>()
+  if (appIds.length === 0) return eligible
+
+  try {
+    const url = `https://store.steampowered.com/api/appdetails?appids=${appIds.join(',')}&filters=categories`
+    const resp = await fetchWithTimeout(url)
+    const data = await resp.json()
+
+    appIds.forEach(id => {
+      const app = data[id.toString()]
+      if (app?.success && app.data?.categories) {
+        const hasCards = app.data.categories.some((c: any) => c.id === 29) // 29 = Trading Cards
+        if (hasCards) eligible.add(id)
+      }
+    })
+  } catch (e) {
+    console.error('Bulk check failed:', e)
+    // If bulk fails, we fallback to conservative: assume eligible to be checked by market 
+    // BUT we want to avoid ban, so maybe only return those already found?
+  }
+  return eligible
 }
 
 // ===== MARKET ENGINE (WITH RETRY & RATE LIMIT DETECTION) =====
@@ -125,7 +154,7 @@ export async function POST(req: Request) {
 
   const run = async () => {
     try {
-      send({ type: 'status', message: 'Tüm kütüphane sıralanıyor...' })
+      send({ type: 'status', message: 'Kütüphane taranıyor...' })
 
       let stemId64 = ''
       let baseUrl = ''
@@ -152,53 +181,61 @@ export async function POST(req: Request) {
         profile: { steamId: stemId64, personaName: 'Steam User', profileUrl: baseUrl }
       })
 
-      send({
-        type: 'progress',
-        current: 0,
-        total: filtered.length,
-        found: library.length,
-        cardGames: 0,
-        totalPotentialDrops: 0
-      })
+      send({ type: 'progress', current: 0, total: filtered.length, found: library.length, cardGames: 0, totalPotentialDrops: 0 })
 
       let processed = 0
       let cardEligibleCount = 0
       let totalPotentialDrops = 0
 
-      for (const game of filtered) {
-        if (processed >= limit) break
+      // Step 1: Pre-verify IDs in batches of 20 to avoid Market bans
+      const gameSubset = filtered.slice(0, limit)
+      const subAppIds = gameSubset.map(g => g.appId)
 
-        send({ type: 'status', message: `Analiz: ${game.gameName}` })
-        const prices = await getCardPrices(game.appId)
+      send({ type: 'status', message: 'Kartlı oyunlar doğrulanıyor (Store API)...' })
+      const hotList = new Set<number>()
+      for (let i = 0; i < subAppIds.length; i += 20) {
+        const batch = subAppIds.slice(i, i + 20)
+        const eligible = await getEligibleAppIds(batch)
+        eligible.forEach(id => hotList.add(id))
+        await delay(500) // Politeness for Store API
+      }
 
-        if (prices && !prices._error && (prices.normalCards.length > 0 || prices.foilCards.length > 0)) {
-          cardEligibleCount++
+      // Step 2: Only Hit Market for HotList
+      for (const game of gameSubset) {
+        processed++
 
-          const normalAvg = prices.normalCards.length > 0 ? (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) : 0
-          const foilAvg = prices.foilCards.length > 0 ? (prices.foilCards.reduce((s, c) => s + c.price, 0) / prices.foilCards.length) : 0
+        if (hotList.has(game.appId)) {
+          send({ type: 'status', message: `Pazar Analizi: ${game.gameName}` })
+          const prices = await getCardPrices(game.appId)
 
-          const totalCardsInSet = Math.max(prices.normalCards.length, 8)
-          const droppableCount = Math.ceil(totalCardsInSet / 2)
-          totalPotentialDrops += droppableCount
+          if (prices && !prices._error) {
+            cardEligibleCount++
+            const normalAvg = prices.normalCards.length > 0 ? (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) : 0
+            const foilAvg = prices.foilCards.length > 0 ? (prices.foilCards.reduce((s, c) => s + c.price, 0) / prices.foilCards.length) : 0
 
-          send({
-            type: 'game',
-            data: {
-              appId: game.appId,
-              gameName: game.gameName,
-              gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
-              normalCards: prices.normalCards,
-              foilCards: prices.foilCards,
-              highestCardPrice: Math.max(...[...prices.normalCards, ...prices.foilCards].map(c => c.price)),
-              totalNormalCards: totalCardsInSet,
-              droppableCardsValue: normalAvg * droppableCount,
-              foilCardsValue: foilAvg,
-              hasCardDrops: true
-            }
-          })
+            const totalCardsInSet = Math.max(prices.normalCards.length, 8)
+            const droppableCount = Math.ceil(totalCardsInSet / 2)
+            totalPotentialDrops += droppableCount
+
+            send({
+              type: 'game',
+              data: {
+                appId: game.appId,
+                gameName: game.gameName,
+                gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
+                normalCards: prices.normalCards,
+                foilCards: prices.foilCards,
+                highestCardPrice: Math.max(...[...prices.normalCards, ...prices.foilCards].map(c => c.price)),
+                totalNormalCards: totalCardsInSet,
+                droppableCardsValue: normalAvg * droppableCount,
+                foilCardsValue: foilAvg,
+                hasCardDrops: true
+              }
+            })
+          }
+          await delay(1300) // Politeness for Market API
         }
 
-        processed++
         send({
           type: 'progress',
           current: processed,
@@ -207,8 +244,6 @@ export async function POST(req: Request) {
           cardGames: cardEligibleCount,
           totalPotentialDrops: totalPotentialDrops
         })
-
-        await delay(1350)
       }
 
       send({ type: 'complete' })

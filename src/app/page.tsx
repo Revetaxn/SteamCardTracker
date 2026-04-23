@@ -185,10 +185,11 @@ export default function SteamCardTracker() {
             }
             if (data.type === 'progress') {
               setProgress(prev => {
-                // FIXED: Use the session base to prevent double counting
+                const total = prev?.total || data.total
+                const current = Math.min(total, sessionBaseRef.current.current + data.current)
                 return {
-                  current: sessionBaseRef.current.current + data.current,
-                  total: prev?.total || data.total,
+                  current,
+                  total,
                   foundInLib: prev?.foundInLib || data.found,
                   cardGames: sessionBaseRef.current.cardGames + data.cardGames,
                   totalPotentialDrops: sessionBaseRef.current.potentialDrops + data.totalPotentialDrops
