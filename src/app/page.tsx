@@ -106,6 +106,7 @@ export default function SteamCardTracker() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
   const [sortBy, setSortBy] = useState<'profit' | 'card'>('profit')
   const [currentPage, setCurrentPage] = useState(1)
+  const [autoScan, setAutoScan] = useState(false)
   const itemsPerPage = 50
 
   useEffect(() => { setIsClient(true) }, [])
@@ -163,8 +164,8 @@ export default function SteamCardTracker() {
               current: (isMore ? (p?.current || 0) : 0) + (data.current || 0),
               total: data.total || 0,
               foundInLib: data.found || 0,
-              cardGames: data.cardGames || 0,
-              totalPotentialDrops: data.totalPotentialDrops || 0
+              cardGames: (isMore ? (p?.cardGames || 0) : 0) + (data.cardGames || 0),
+              totalPotentialDrops: (isMore ? (p?.totalPotentialDrops || 0) : 0) + (data.totalPotentialDrops || 0)
             }))
             if (data.type === 'game') {
               setGames(prev => {
@@ -187,6 +188,14 @@ export default function SteamCardTracker() {
     }
   }, [url, apiKey, lang, t, games])
 
+  // Auto-Scan Effect
+  useEffect(() => {
+    if (autoScan && !loading && progress && progress.current < progress.total) {
+      const timer = setTimeout(() => analyzeProfile(true), 1500)
+      return () => clearTimeout(timer)
+    }
+  }, [autoScan, loading, progress, analyzeProfile])
+
   const toggleGame = useCallback((id: number) => {
     setExpandedGames(prev => {
       const next = new Set(prev)
@@ -198,7 +207,7 @@ export default function SteamCardTracker() {
 
   const sortedGames = useMemo(() => {
     return [...games].sort((a, b) => {
-      if (sortBy === 'profit') return (b.droppableCardsValue + b.foilCardsValue) - (a.droppableCardsValue + a.foilCardsValue)
+      if (sortBy === 'profit') return b.droppableCardsValue - a.droppableCardsValue
       return b.highestCardPrice - a.highestCardPrice
     })
   }, [games, sortBy])
@@ -209,7 +218,8 @@ export default function SteamCardTracker() {
   }, [sortedGames, currentPage])
 
   const totalPages = Math.ceil(sortedGames.length / itemsPerPage)
-  const totalPot = useMemo(() => games.reduce((acc, g) => acc + g.droppableCardsValue + g.foilCardsValue, 0), [games])
+  const totalPot = useMemo(() => games.reduce((acc, g) => acc + g.droppableCardsValue, 0), [games])
+  const totalFoilValue = useMemo(() => games.reduce((acc, g) => acc + g.foilCardsValue, 0), [games])
 
   if (!isClient) return null
 
@@ -270,9 +280,18 @@ export default function SteamCardTracker() {
                   </div>
                   <Progress value={(progress.current / (progress.total || 1)) * 100} className="h-2 bg-white/5 [&>div]:bg-[#66c0f4] mb-4" />
                   {!loading && progress.current < progress.total && (
-                    <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[9px] uppercase tracking-widest rounded-lg transition-transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20">
-                      SIRADAKİ 100 OYUNU TARA
-                    </Button>
+                    <div className="flex flex-col gap-2">
+                      <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[9px] uppercase tracking-widest rounded-lg transition-transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20">
+                        DEVAM ET (BATI-100)
+                      </Button>
+                      <button
+                        onClick={() => setAutoScan(!autoScan)}
+                        className={`text-[9px] font-black uppercase tracking-widest transition-colors flex items-center justify-center gap-2 py-1 ${autoScan ? 'text-green-400' : 'text-[#4d535b]'}`}
+                      >
+                        <Zap className={`w-3 h-3 ${autoScan ? 'fill-green-400' : ''}`} />
+                        {autoScan ? 'OTOMATİK TARAMA AKTİF' : 'OTOMATİK TARA'}
+                      </button>
+                    </div>
                   )}
                   {loading && (
                     <div className="flex items-center gap-2 text-[9px] font-black uppercase text-[#66c0f4] animate-pulse italic">
@@ -299,7 +318,7 @@ export default function SteamCardTracker() {
                   </TooltipTrigger>
                   <TooltipContent className="bg-[#171d25] border-white/10 text-white p-3 max-w-xs">
                     <p className="text-[10px] font-black uppercase mb-1">Kartlı Oyun Tespit Sistemi</p>
-                    <p className="text-[9px] text-[#8f98a0] leading-none">Kütüphanendeki {progress.foundInLib} oyundan tam olarak {progress.cardGames} tanesi kart düşürme özelliğine sahip.</p>
+                    <p className="text-[9px] text-[#8f98a0] leading-none">Kütüphanendeki {progress.foundInLib} oyundan şimdilik {progress.cardGames} tanesinin kartı doğrulandı.</p>
                   </TooltipContent>
                 </Tooltip>
               </Card>
@@ -311,7 +330,7 @@ export default function SteamCardTracker() {
                     <div className="text-4xl font-black text-white italic tracking-tighter">{progress.totalPotentialDrops}</div>
                     <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Cards</div>
                   </div>
-                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Library Limit: 100% Correct</p>
+                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Total Estimated Drops</p>
                 </CardContent>
               </Card>
 
@@ -322,6 +341,7 @@ export default function SteamCardTracker() {
                     <div className="text-4xl font-black text-green-400 italic tracking-tighter">${totalPot.toFixed(2)}</div>
                     <div className="text-[10px] font-bold text-green-400 mb-2 uppercase tracking-widest group-hover:scale-110 transition-transform">USD</div>
                   </div>
+                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Normal Drops Only</p>
                 </CardContent>
               </Card>
             </div>
@@ -380,7 +400,7 @@ export default function SteamCardTracker() {
 
                       <div className="flex items-center gap-5 mt-2.5">
                         <div className="flex flex-col">
-                          <span className="text-[9px] font-black text-[#8f98a0] uppercase tracking-widest italic leading-none mb-1">Drops Value</span>
+                          <span className="text-[9px] font-black text-[#8f98a0] uppercase tracking-widest italic leading-none mb-1">Drops Value ({dropCount} Cards)</span>
                           <span className="text-sm font-black text-green-400 font-mono tracking-tighter">${game.droppableCardsValue.toFixed(2)}</span>
                         </div>
                         <div className="w-px h-5 bg-white/5"></div>
