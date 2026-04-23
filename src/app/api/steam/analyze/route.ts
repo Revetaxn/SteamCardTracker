@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
 // ===== UTILS =====
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 15000) {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 20000) {
   const controller = new AbortController()
   const id = setTimeout(() => controller.abort(), timeout)
   try {
@@ -32,78 +32,51 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
     } catch { }
   }
 
-  if (found.size < 10) {
-    // Tier 2: HTML Library Page
-    try {
-      const html = await (await fetchWithTimeout(`${baseUrl}/games/?tab=all`.replace(/\/+/g, '/'))).text()
-      const rgMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
-      if (rgMatch) {
-        const gList = JSON.parse(rgMatch[1])
-        gList.forEach((g: any) => {
-          if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name) })
-        })
-      }
-    } catch { }
-  }
-
-  if (found.size === 0) {
-    // Tier 3: XML Library Page
-    try {
-      const xml = await (await fetchWithTimeout(`${baseUrl}/games/?xml=1`.replace(/\/+/g, '/'))).text()
-      const appIds = [...xml.matchAll(/<appID>(\d+)<\/appID>/g)].map(m => parseInt(m[1]))
-      const names = [...xml.matchAll(/<name><!\[CDATA\[(.*?)\]\]><\/name>/g)].map(m => m[1])
-      appIds.forEach((id, i) => {
-        if (!found.has(id)) found.set(id, { name: clean(names[i] || `App ${id}`) })
+  // Tier 2: HTML Library Page
+  try {
+    const html = await (await fetchWithTimeout(`${baseUrl}/games/?tab=all`.replace(/\/+/g, '/'))).text()
+    const rgMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
+    if (rgMatch) {
+      const gList = JSON.parse(rgMatch[1])
+      gList.forEach((g: any) => {
+        if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name) })
       })
-    } catch { }
-  }
+    }
+  } catch { }
+
+  // Tier 3: XML Library Page
+  try {
+    const xml = await (await fetchWithTimeout(`${baseUrl}/games/?xml=1`.replace(/\/+/g, '/'))).text()
+    const appIds = [...xml.matchAll(/<appID>(\d+)<\/appID>/g)].map(m => parseInt(m[1]))
+    const names = [...xml.matchAll(/<name><!\[CDATA\[(.*?)\]\]><\/name>/g)].map(m => m[1])
+    appIds.forEach((id, i) => {
+      if (!found.has(id)) found.set(id, { name: clean(names[i] || `App ${id}`) })
+    })
+  } catch { }
 
   return Array.from(found.entries()).map(([id, info]) => ({ appId: id, gameName: info.name }))
 }
 
-// ===== BULK CATEGORY CHECK (SAVES MARKET CALLS) =====
-async function getEligibleAppIds(appIds: number[]): Promise<Set<number>> {
-  const eligible = new Set<number>()
-  if (appIds.length === 0) return eligible
-
-  try {
-    const url = `https://store.steampowered.com/api/appdetails?appids=${appIds.join(',')}&filters=categories`
-    const resp = await fetchWithTimeout(url)
-    const data = await resp.json()
-
-    appIds.forEach(id => {
-      const app = data[id.toString()]
-      if (app?.success && app.data?.categories) {
-        const hasCards = app.data.categories.some((c: any) => c.id === 29) // 29 = Trading Cards
-        if (hasCards) eligible.add(id)
-      }
-    })
-  } catch (e) {
-    console.error('Bulk check failed:', e)
-    // If bulk fails, we fallback to conservative: assume eligible to be checked by market 
-    // BUT we want to avoid ban, so maybe only return those already found?
-  }
-  return eligible
-}
-
-// ===== MARKET ENGINE (WITH RETRY & RATE LIMIT DETECTION) =====
+// ===== MARKET ENGINE (SUPER ROBUST RETRY) =====
 async function getCardPrices(appId: number, retryCount = 0): Promise<any> {
   try {
     const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=15&currency=1&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
     const resp = await fetchWithTimeout(url, { headers: { 'Referer': 'https://steamcommunity.com/market/' } })
 
-    if (resp.status === 429 || resp.status === 403) {
-      if (retryCount < 2) {
-        await delay(5000 * (retryCount + 1))
+    // IF Rate Limited, WAIT and RETRY (Don't skip!)
+    if (resp.status === 429 || resp.status === 403 || resp.status >= 500) {
+      if (retryCount < 4) {
+        const wait = 8000 * (retryCount + 1)
+        await delay(wait)
         return getCardPrices(appId, retryCount + 1)
       }
-      return { _error: 'Rate Limit' }
+      return { _error: 'Banned' }
     }
 
     const data = await resp.json()
     if (!data?.success) {
-      if (retryCount < 2) {
-        await delay(3000)
+      if (retryCount < 3) {
+        await delay(4000)
         return getCardPrices(appId, retryCount + 1)
       }
       return null
@@ -131,8 +104,8 @@ async function getCardPrices(appId: number, retryCount = 0): Promise<any> {
 
     return { normalCards, foilCards }
   } catch {
-    if (retryCount < 1) {
-      await delay(2000)
+    if (retryCount < 2) {
+      await delay(3000)
       return getCardPrices(appId, retryCount + 1)
     }
     return null
@@ -154,7 +127,7 @@ export async function POST(req: Request) {
 
   const run = async () => {
     try {
-      send({ type: 'status', message: 'Kütüphane taranıyor...' })
+      send({ type: 'status', message: 'Kütüphane verileri çekiliyor...' })
 
       let stemId64 = ''
       let baseUrl = ''
@@ -187,28 +160,35 @@ export async function POST(req: Request) {
       let cardEligibleCount = 0
       let totalPotentialDrops = 0
 
-      // Step 1: Pre-verify IDs in batches of 20 to avoid Market bans
+      // Step 1: Pre-verify via Badges Page for MAXIMUM reliability
+      const badgeIds = new Set<number>()
+      try {
+        send({ type: 'status', message: 'Rozet sayfası analiz ediliyor...' })
+        const badgeHtml = await (await fetchWithTimeout(`${baseUrl}/badges/`)).text()
+        const matches = badgeHtml.matchAll(/gamecards\/(\d+)/g)
+        for (const m of matches) badgeIds.add(parseInt(m[1]))
+      } catch { }
+
       const gameSubset = filtered.slice(0, limit)
-      const subAppIds = gameSubset.map(g => g.appId)
 
-      send({ type: 'status', message: 'Kartlı oyunlar doğrulanıyor (Store API)...' })
-      const hotList = new Set<number>()
-      for (let i = 0; i < subAppIds.length; i += 20) {
-        const batch = subAppIds.slice(i, i + 20)
-        const eligible = await getEligibleAppIds(batch)
-        eligible.forEach(id => hotList.add(id))
-        await delay(500) // Politeness for Store API
-      }
-
-      // Step 2: Only Hit Market for HotList
       for (const game of gameSubset) {
         processed++
 
-        if (hotList.has(game.appId)) {
-          send({ type: 'status', message: `Pazar Analizi: ${game.gameName}` })
-          const prices = await getCardPrices(game.appId)
+        // Always check if in badge list, OR always check others slightly slower
+        send({ type: 'status', message: `Analiz: ${game.gameName}` })
 
-          if (prices && !prices._error) {
+        // If it's a known "No Cards" game (not in badges), we can still check but very carefully
+        // FOR NOW: Let's follow the user's request: check EVERY game but be ROBUST
+        const prices = await getCardPrices(game.appId)
+
+        if (prices) {
+          if (prices._error === 'Banned') {
+            // Stop the stream or notify user? Let's notify and break
+            send({ type: 'status', message: '!!! STEAM PAZAR ENGELİ !!! 10DK BEKLEYİN.' })
+            break
+          }
+
+          if (prices.normalCards?.length > 0 || prices.foilCards?.length > 0) {
             cardEligibleCount++
             const normalAvg = prices.normalCards.length > 0 ? (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) : 0
             const foilAvg = prices.foilCards.length > 0 ? (prices.foilCards.reduce((s, c) => s + c.price, 0) / prices.foilCards.length) : 0
@@ -233,7 +213,6 @@ export async function POST(req: Request) {
               }
             })
           }
-          await delay(1300) // Politeness for Market API
         }
 
         send({
@@ -244,6 +223,8 @@ export async function POST(req: Request) {
           cardGames: cardEligibleCount,
           totalPotentialDrops: totalPotentialDrops
         })
+
+        await delay(1650) // Increased delay for safety
       }
 
       send({ type: 'complete' })
