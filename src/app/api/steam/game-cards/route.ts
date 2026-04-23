@@ -21,6 +21,7 @@ interface GameCardResult {
   totalFoilCardsValue: number
   cardDropsTotal: number
   droppableCardsValue: number
+  avgCardPrice: number
   highestNormalCardPrice: number
   highestFoilCardPrice: number
 }
@@ -226,6 +227,7 @@ export async function POST(request: NextRequest) {
         totalFoilCardsValue: 0,
         cardDropsTotal: 0,
         droppableCardsValue: 0,
+        avgCardPrice: 0,
         highestNormalCardPrice: 0,
         highestFoilCardPrice: 0,
         hasCards: false,
@@ -235,7 +237,10 @@ export async function POST(request: NextRequest) {
     const totalNormalCardsValue = normalCards.reduce((sum, c) => sum + c.price, 0)
     const totalFoilCardsValue = foilCards.reduce((sum, c) => sum + c.price, 0)
     const cardDropsTotal = Math.ceil(normalCards.length / 2)
-    const droppableCardsValue = normalCards.slice(0, cardDropsTotal).reduce((sum, c) => sum + c.price, 0)
+    // All normal cards can drop randomly (duplicates possible)
+    // Expected value = cardDropsTotal × average card price
+    const avgCardPrice = normalCards.length > 0 ? totalNormalCardsValue / normalCards.length : 0
+    const droppableCardsValue = Math.round(avgCardPrice * cardDropsTotal * 100) / 100
     const highestNormalCardPrice = normalCards.length > 0 ? normalCards[0].price : 0
     const highestFoilCardPrice = foilCards.length > 0 ? foilCards[0].price : 0
 
@@ -250,6 +255,7 @@ export async function POST(request: NextRequest) {
       totalFoilCardsValue,
       cardDropsTotal,
       droppableCardsValue,
+      avgCardPrice,
       highestNormalCardPrice,
       highestFoilCardPrice,
       hasCards: true,

@@ -83,7 +83,7 @@ const translations: Record<Lang, Record<string, string>> = {
 
     // Stats
     cardGames: 'Kartlı Oyun',
-    droppableValue: 'Düşebilir Değer',
+    droppableValue: 'Beklenen Değer',
     totalNormal: 'Tüm Normal Top.',
     totalDrops: 'Toplam Düşecek',
     normalCards: 'Normal Kart',
@@ -92,10 +92,13 @@ const translations: Record<Lang, Record<string, string>> = {
     foilValue: 'Foil Değer',
     dropCount: 'Düşecek Sayı',
     highestCard: 'En Yüksek',
+    avgCardPrice: 'Ort. Kart',
+    expectedValue: 'Beklenen Değer',
+    dropExplanation: 'Her düşüş rastgele, aynı karttan birden fazla düşebilir',
 
     // Sort
-    gamesSortedBy: 'Oyunlar — Düşebilecek Kart Değerine Göre',
-    sortDroppable: 'Düşebilir',
+    gamesSortedBy: 'Oyunlar — Beklenen Kart Değerine Göre',
+    sortDroppable: 'Beklenen',
     sortHighest: 'En Yüksek',
     sortTotal: 'Toplam',
     sortDrops: 'Düşecek',
@@ -106,12 +109,13 @@ const translations: Record<Lang, Record<string, string>> = {
     foilLabel: 'foil',
 
     // Expanded sections
-    droppableCards: 'Düşebilecek Kartlar',
-    otherNormalCards: 'Diğer Normal Kartlar',
-    tradeOnly: 'düşmez, takas ile alınır',
+    droppableCards: 'Tüm Normal Kartlar',
+    allCardsCanDrop: 'Tüm kartlar düşebilir (rastgele, tekrarlı)',
     foilCardsSection: 'Foil Kartlar',
     notIncludedInTotal: 'toplama dahil değil',
     viewOnMarket: "Steam Market'te görüntüle",
+    expectedDropValue: 'Beklenen düşüş değeri',
+    avgPricePerCard: 'Ortalama kart fiyatı',
 
     // Empty state
     discoverTitle: 'Steam Kart Değerlerinizi Keşfedin',
@@ -185,7 +189,7 @@ const translations: Record<Lang, Record<string, string>> = {
 
     // Stats
     cardGames: 'Card Games',
-    droppableValue: 'Droppable Value',
+    droppableValue: 'Expected Value',
     totalNormal: 'Total Normal',
     totalDrops: 'Total Drops',
     normalCards: 'Normal Cards',
@@ -194,10 +198,13 @@ const translations: Record<Lang, Record<string, string>> = {
     foilValue: 'Foil Value',
     dropCount: 'Drop Count',
     highestCard: 'Highest Card',
+    avgCardPrice: 'Avg Card',
+    expectedValue: 'Expected Value',
+    dropExplanation: 'Each drop is random, same card can drop multiple times',
 
     // Sort
-    gamesSortedBy: 'Games — Sorted by Droppable Card Value',
-    sortDroppable: 'Droppable',
+    gamesSortedBy: 'Games — Sorted by Expected Card Value',
+    sortDroppable: 'Expected',
     sortHighest: 'Highest',
     sortTotal: 'Total',
     sortDrops: 'Drops',
@@ -208,12 +215,13 @@ const translations: Record<Lang, Record<string, string>> = {
     foilLabel: 'foil',
 
     // Expanded sections
-    droppableCards: 'Droppable Cards',
-    otherNormalCards: 'Other Normal Cards',
-    tradeOnly: 'won\'t drop, trade only',
-    notIncludedInTotal: 'not included in total',
+    droppableCards: 'All Normal Cards',
+    allCardsCanDrop: 'All cards can drop (random, with duplicates)',
     foilCardsSection: 'Foil Cards',
+    notIncludedInTotal: 'not included in total',
     viewOnMarket: 'View on Steam Market',
+    expectedDropValue: 'Expected drop value',
+    avgPricePerCard: 'Average card price',
 
     // Empty state
     discoverTitle: 'Discover Your Steam Card Values',
@@ -268,6 +276,7 @@ interface GameCardInfo {
   totalFoilCards: number
   cardDropsTotal: number
   droppableCardsValue: number
+  avgCardPrice: number
   hasCardDrops: boolean
 }
 
@@ -282,6 +291,7 @@ interface GameLookupResult {
   totalFoilCardsValue: number
   cardDropsTotal: number
   droppableCardsValue: number
+  avgCardPrice: number
   highestNormalCardPrice: number
   highestFoilCardPrice: number
   hasCards: boolean
@@ -954,38 +964,22 @@ export default function Home() {
                                 <div className="border-t border-[#2a475e]/30 pt-3 space-y-3">
                                   {game.normalCards.length > 0 && (
                                     <div>
-                                      <div className="text-[10px] font-semibold text-green-400/80 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                                      <div className="text-[10px] font-semibold text-green-400/80 uppercase tracking-wider mb-1.5 flex items-center gap-1 flex-wrap">
                                         <Zap className="w-3 h-3" />
-                                        {t('droppableCards')} ({game.cardDropsTotal}/{game.totalNormalCards})
-                                        <span className="text-green-400 ml-1 normal-case font-bold">— ${game.droppableCardsValue.toFixed(2)}</span>
+                                        {t('droppableCards')} ({game.totalNormalCards})
+                                        <span className="text-green-400 ml-1 normal-case font-bold">— {t('expectedDropValue')}: ${game.droppableCardsValue.toFixed(2)}</span>
+                                        <span className="text-[#8f98a0]/50 ml-1 normal-case font-normal">({game.cardDropsTotal} {t('cardDropsBadge')} × ${game.avgCardPrice?.toFixed(2) || (game.totalNormalCards > 0 ? (game.totalNormalCardsValue / game.totalNormalCards).toFixed(2) : '0.00')})</span>
+                                      </div>
+                                      <div className="text-[9px] text-[#8f98a0]/50 mb-2 italic">
+                                        {t('dropExplanation')}
                                       </div>
                                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
-                                        {game.normalCards.slice(0, game.cardDropsTotal).map((card, idx) => (
+                                        {game.normalCards.map((card, idx) => (
                                           <div key={idx} className="flex items-center gap-2 bg-green-500/5 border border-green-500/10 rounded-md px-2 py-1.5 hover:bg-green-500/10 transition-colors">
                                             <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
                                             <div className="flex-1 min-w-0">
                                               <div className="text-[11px] text-[#c7d5e0] truncate">{card.name}</div>
                                               <div className="text-[10px] text-green-400 font-medium">${card.price.toFixed(2)}</div>
-                                            </div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {game.normalCards.length > game.cardDropsTotal && (
-                                    <div>
-                                      <div className="text-[10px] font-semibold text-[#8f98a0] uppercase tracking-wider mb-1.5">
-                                        {t('otherNormalCards')} ({game.normalCards.length - game.cardDropsTotal})
-                                        <span className="ml-1 normal-case font-normal text-[#8f98a0]/60">— {t('tradeOnly')}</span>
-                                      </div>
-                                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
-                                        {game.normalCards.slice(game.cardDropsTotal).map((card, idx) => (
-                                          <div key={idx} className="flex items-center gap-2 bg-[#2a475e]/20 rounded-md px-2 py-1.5 hover:bg-[#2a475e]/30 transition-colors opacity-60">
-                                            <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
-                                            <div className="flex-1 min-w-0">
-                                              <div className="text-[11px] text-[#c7d5e0] truncate">{card.name}</div>
-                                              <div className="text-[10px] text-green-400/60 font-medium">${card.price.toFixed(2)}</div>
                                             </div>
                                           </div>
                                         ))}

@@ -22,8 +22,9 @@ interface GameCardInfo {
   totalNormalCardsValue: number
   totalNormalCards: number
   totalFoilCards: number
-  cardDropsTotal: number       // How many cards can drop (ceil of normalCards / 2)
-  droppableCardsValue: number  // Value of the top cardDropsTotal normal cards
+  cardDropsTotal: number           // How many cards will drop (ceil of normalCards / 2)
+  droppableCardsValue: number      // Expected value: cardDropsTotal × avg(normalCard prices)
+  avgCardPrice: number             // Average price of a normal card
   hasCardDrops: boolean
 }
 
@@ -748,10 +749,10 @@ export async function POST(request: NextRequest) {
 
               // Card drops = ceil(total normal cards / 2) — Steam's rule
               const cardDropsTotal = Math.ceil(normalCards.length / 2)
-              // Droppable value = sum of top cardDropsTotal normal cards (sorted desc already)
-              const droppableCardsValue = normalCards
-                .slice(0, cardDropsTotal)
-                .reduce((sum, c) => sum + c.price, 0)
+              // All normal cards can drop randomly (duplicates possible)
+              // Expected value = cardDropsTotal × average card price
+              const avgCardPrice = totalNormalCardsValue / normalCards.length
+              const droppableCardsValue = Math.round(avgCardPrice * cardDropsTotal * 100) / 100
 
               return {
                 appId: game.appId,
