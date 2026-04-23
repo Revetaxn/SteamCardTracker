@@ -33,6 +33,9 @@ import {
   Layers,
   Globe,
   Package,
+  Heart,
+  Gift,
+  ArrowRightLeft,
 } from 'lucide-react'
 
 // ===== i18n Translation Dictionary =====
@@ -144,6 +147,15 @@ const translations: Record<Lang, Record<string, string>> = {
 
     // Footer
     footer: 'Steam Kart Takipçi — Steam Market güncel fiyatları gerçek zamanlı çekilir • Fiyatlar USD cinsindendir • Foil kartlar toplama dahil değildir',
+
+    // Support
+    supportBtn: 'Destekle ❤️',
+    supportTitle: 'Desteklemek ister misin?',
+    supportDesc: 'Bu araç işine yaradıysa, aşağıdaki yollardan biriyle destek olabilirsin:',
+    supportWishlist: 'İstek Listem',
+    supportWishlistDesc: 'Steam istek listemden oyun hediye et',
+    supportTrade: 'Takas Teklifi',
+    supportTradeDesc: 'Steam takas bağlantım üzerinden takas yap',
   },
   en: {
     // Header
@@ -250,6 +262,15 @@ const translations: Record<Lang, Record<string, string>> = {
 
     // Footer
     footer: 'Steam Card Tracker — Steam Market live prices fetched in real-time • Prices are in USD • Foil cards are not included in totals',
+
+    // Support
+    supportBtn: 'Support ❤️',
+    supportTitle: 'Want to support?',
+    supportDesc: 'If this tool helped you, you can support me through one of these:',
+    supportWishlist: 'My Wishlist',
+    supportWishlistDesc: 'Gift a game from my Steam wishlist',
+    supportTrade: 'Trade Offer',
+    supportTradeDesc: 'Send a trade offer via my Steam trade link',
   },
 }
 
@@ -344,6 +365,9 @@ export default function Home() {
   const [gameLoading, setGameLoading] = useState(false)
   const [gameResult, setGameResult] = useState<GameLookupResult | null>(null)
   const [gameError, setGameError] = useState<string | null>(null)
+
+  // Support panel state
+  const [showSupport, setShowSupport] = useState(false)
 
   // ===== Profile Analysis =====
   const analyzeProfile = useCallback(async () => {
@@ -551,7 +575,7 @@ export default function Home() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
           <Card className="bg-[#2a475e]/30 border-[#2a475e]/50">
             <CardContent className="p-2.5 text-center">
               <Layers className="w-3.5 h-3.5 text-[#66c0f4] mx-auto mb-0.5" />
@@ -563,7 +587,7 @@ export default function Home() {
             <CardContent className="p-2.5 text-center">
               <Zap className="w-3.5 h-3.5 text-green-400 mx-auto mb-0.5" />
               <div className="text-sm font-bold text-green-400">${result.droppableCardsValue.toFixed(2)}</div>
-              <div className="text-[9px] text-[#8f98a0]">{t('droppableValue')}</div>
+              <div className="text-[9px] text-[#8f98a0]">{t('expectedValue')}</div>
             </CardContent>
           </Card>
           <Card className="bg-[#2a475e]/30 border-[#2a475e]/50">
@@ -582,6 +606,13 @@ export default function Home() {
           </Card>
           <Card className="bg-[#2a475e]/30 border-[#2a475e]/50">
             <CardContent className="p-2.5 text-center">
+              <TrendingUp className="w-3.5 h-3.5 text-teal-400 mx-auto mb-0.5" />
+              <div className="text-sm font-bold text-teal-400">${result.avgCardPrice.toFixed(2)}</div>
+              <div className="text-[9px] text-[#8f98a0]">{t('avgCardPrice')}</div>
+            </CardContent>
+          </Card>
+          <Card className="bg-[#2a475e]/30 border-[#2a475e]/50">
+            <CardContent className="p-2.5 text-center">
               <Sparkles className="w-3.5 h-3.5 text-yellow-400 mx-auto mb-0.5" />
               <div className="text-sm font-bold text-yellow-400">{result.totalFoilCards}</div>
               <div className="text-[9px] text-[#8f98a0]">{t('foilCards')}</div>
@@ -589,42 +620,25 @@ export default function Home() {
           </Card>
         </div>
 
-        {/* Droppable Normal Cards */}
+        {/* All Normal Cards (all can drop randomly) */}
         {result.normalCards.length > 0 && (
           <div>
-            <div className="text-[10px] font-semibold text-green-400/80 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+            <div className="text-[10px] font-semibold text-green-400/80 uppercase tracking-wider mb-1.5 flex items-center gap-1 flex-wrap">
               <Zap className="w-3 h-3" />
-              {t('droppableCards')} ({result.cardDropsTotal}/{result.totalNormalCards})
-              <span className="text-green-400 ml-1 normal-case font-bold">— ${result.droppableCardsValue.toFixed(2)}</span>
+              {t('droppableCards')} ({result.totalNormalCards})
+              <span className="text-green-400 ml-1 normal-case font-bold">— {t('expectedDropValue')}: ${result.droppableCardsValue.toFixed(2)}</span>
+              <span className="text-[#8f98a0]/50 ml-1 normal-case font-normal">({result.cardDropsTotal} {t('cardDropsBadge')} × ${result.avgCardPrice.toFixed(2)})</span>
+            </div>
+            <div className="text-[9px] text-[#8f98a0]/50 mb-2 italic">
+              {t('dropExplanation')}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
-              {result.normalCards.slice(0, result.cardDropsTotal).map((card, idx) => (
+              {result.normalCards.map((card, idx) => (
                 <div key={idx} className="flex items-center gap-2 bg-green-500/5 border border-green-500/10 rounded-md px-2 py-1.5 hover:bg-green-500/10 transition-colors">
                   <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] text-[#c7d5e0] truncate">{card.name}</div>
                     <div className="text-[10px] text-green-400 font-medium">${card.price.toFixed(2)}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Remaining Normal Cards */}
-        {result.normalCards.length > result.cardDropsTotal && (
-          <div>
-            <div className="text-[10px] font-semibold text-[#8f98a0] uppercase tracking-wider mb-1.5">
-              {t('otherNormalCards')} ({result.normalCards.length - result.cardDropsTotal})
-              <span className="ml-1 normal-case font-normal text-[#8f98a0]/60">— {t('tradeOnly')}</span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
-              {result.normalCards.slice(result.cardDropsTotal).map((card, idx) => (
-                <div key={idx} className="flex items-center gap-2 bg-[#2a475e]/20 rounded-md px-2 py-1.5 hover:bg-[#2a475e]/30 transition-colors opacity-60">
-                  <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[11px] text-[#c7d5e0] truncate">{card.name}</div>
-                    <div className="text-[10px] text-green-400/60 font-medium">${card.price.toFixed(2)}</div>
                   </div>
                 </div>
               ))}
@@ -1184,6 +1198,79 @@ export default function Home() {
           {t('footer')}
         </div>
       </footer>
+
+      {/* Support Button + Panel (bottom right) */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+        {/* Support Panel */}
+        {showSupport && (
+          <Card className="bg-[#1e2d3d] border border-[#66c0f4]/20 shadow-2xl shadow-black/40 w-72 animate-in slide-in-from-bottom-2 duration-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-bold text-[#c7d5e0] flex items-center gap-1.5">
+                  <Heart className="w-4 h-4 text-pink-400" />
+                  {t('supportTitle')}
+                </h4>
+                <button onClick={() => setShowSupport(false)} className="text-[#8f98a0]/50 hover:text-[#8f98a0] transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-[11px] text-[#8f98a0] mb-3 leading-relaxed">
+                {t('supportDesc')}
+              </p>
+
+              {/* Wishlist Link */}
+              <a
+                href="https://store.steampowered.com/wishlist/id/Revetaxn/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-2.5 rounded-lg bg-[#2a475e]/30 hover:bg-[#2a475e]/50 border border-[#2a475e]/50 hover:border-[#66c0f4]/30 transition-all group mb-2"
+              >
+                <div className="w-9 h-9 rounded-lg bg-[#66c0f4]/10 flex items-center justify-center flex-shrink-0 group-hover:bg-[#66c0f4]/20 transition-colors">
+                  <Gift className="w-5 h-5 text-[#66c0f4]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-[#c7d5e0] group-hover:text-[#66c0f4] transition-colors">{t('supportWishlist')}</div>
+                  <div className="text-[10px] text-[#8f98a0]/60">{t('supportWishlistDesc')}</div>
+                </div>
+                <ExternalLink className="w-3.5 h-3.5 text-[#8f98a0]/30 group-hover:text-[#66c0f4] transition-colors flex-shrink-0" />
+              </a>
+
+              {/* Trade Link */}
+              <a
+                href="https://steamcommunity.com/tradeoffer/new/?partner=75521086&token=4YxxBXfy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-2.5 rounded-lg bg-[#2a475e]/30 hover:bg-[#2a475e]/50 border border-[#2a475e]/50 hover:border-green-500/30 transition-all group"
+              >
+                <div className="w-9 h-9 rounded-lg bg-green-500/10 flex items-center justify-center flex-shrink-0 group-hover:bg-green-500/20 transition-colors">
+                  <ArrowRightLeft className="w-5 h-5 text-green-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-[#c7d5e0] group-hover:text-green-400 transition-colors">{t('supportTrade')}</div>
+                  <div className="text-[10px] text-[#8f98a0]/60">{t('supportTradeDesc')}</div>
+                </div>
+                <ExternalLink className="w-3.5 h-3.5 text-[#8f98a0]/30 group-hover:text-green-400 transition-colors flex-shrink-0" />
+              </a>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Support FAB Button */}
+        <button
+          onClick={() => setShowSupport(prev => !prev)}
+          className={`w-12 h-12 rounded-full shadow-lg shadow-black/30 flex items-center justify-center transition-all duration-200 ${
+            showSupport
+              ? 'bg-[#2a475e] hover:bg-[#2a475e]/80 text-[#8f98a0] rotate-0'
+              : 'bg-gradient-to-br from-pink-500 to-rose-600 hover:from-pink-400 hover:to-rose-500 text-white hover:scale-105 active:scale-95'
+          }`}
+        >
+          {showSupport ? (
+            <X className="w-5 h-5" />
+          ) : (
+            <Heart className="w-5 h-5" />
+          )}
+        </button>
+      </div>
     </div>
   )
 }

@@ -151,3 +151,30 @@ Stage Summary:
 - New "Oyun Kartları / Game Cards" tab for single-game card lookup
 - Backend: /api/steam/game-cards endpoint for specific game card fetching
 - All existing features preserved and translated
+
+---
+Task ID: 6
+Agent: Main
+Task: Fix card drop calculation (all cards can drop) and add support button
+
+Work Log:
+- Fixed card drop value calculation: previously used "top N cards value" (wrong — assumed some cards won't drop)
+- New formula: expected value = cardDropsTotal × avgCardPrice (correct — all cards can drop randomly, with duplicates)
+- Added avgCardPrice field to GameCardInfo type and both backend endpoints
+- Updated frontend to show all normal cards in single section (removed "won't drop / trade only" split)
+- Added drop explanation text: "Her düşüş rastgele, aynı karttan birden fazla düşebilir"
+- Updated all i18n labels: droppableValue → expectedValue, sortDroppable → sortBeklenen/Expected
+- Added avgCardPrice stat card in game lookup results (6 stats instead of 5)
+- Added support button (FAB) in bottom-right corner with pink heart icon
+- Support panel contains two options:
+  1. Steam Wishlist (https://store.steampowered.com/wishlist/id/Revetaxn/) — Gift a game
+  2. Steam Trade Link (https://steamcommunity.com/tradeoffer/new/?partner=75521086&token=4YxxBXfy) — Send trade offer
+- Panel slides up from FAB button, click again to close
+- Added translations for support section in both TR and EN
+- Added Heart, Gift, ArrowRightLeft icons from lucide-react
+
+Stage Summary:
+- Card drop calculation now correctly uses expected value (all cards can drop, random with duplicates)
+- Removed incorrect "won't drop" section from expanded card views
+- Support button with wishlist + trade link in bottom-right corner
+- All i18n translations updated for new labels

@@ -767,6 +767,7 @@ export async function POST(request: NextRequest) {
                 totalFoilCards: foilCards.length,
                 cardDropsTotal,
                 droppableCardsValue,
+                avgCardPrice,
                 hasCardDrops: game.hasCardDrops ?? false,
               } as GameCardInfo
             })
