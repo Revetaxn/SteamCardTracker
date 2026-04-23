@@ -154,7 +154,7 @@ async function filterCardEligible(appIds: number[]) {
 
 async function getCardPrices(appId: number) {
   try {
-    const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
+    const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&currency=1&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
     const data = await (await fetchWithTimeout(url, { headers: { 'Referer': 'https://steamcommunity.com/market/' } })).json()
     if (!data?.success || !data.results) return null
 
@@ -166,7 +166,7 @@ async function getCardPrices(appId: number) {
       const card = {
         name: item.name,
         price: item.sell_price / 100,
-        priceText: item.sell_price_text,
+        priceText: item.sell_price_text || `$${(item.sell_price / 100).toFixed(2)}`,
         isFoil,
         imageUrl: `https://community.akamai.steamstatic.com/economy/image/${item.asset_description?.icon_url_large || item.asset_description?.icon_url}/62fx62f`
       }

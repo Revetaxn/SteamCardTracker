@@ -51,7 +51,7 @@ const translations = {
     subtitle: 'Kütüphanendeki en değerli koleksiyon kartlarını bul ve kazancını maksimize et.',
     urlLabel: 'Steam Profil URL veya SteamID64',
     urlPlaceholder: 'Örn: https://steamcommunity.com/id/stancly/',
-    apiKeyLabel: 'Steam API Anahtarı (Opsiyonel)',
+    apiKeyLabel: 'Steam API Anahtarı',
     apiKeyPlaceholder: 'Daha hızlı keşif için...',
     analyze: 'Kütüphaneyi Tara',
     continue: 'Kalanları Getir',
@@ -59,7 +59,7 @@ const translations = {
     scanning: 'Kütüphane taranıyor...',
     found: 'kartlı oyun bulundu',
     totalGames: 'Toplam Oyun',
-    potentialProfit: 'Tahmini Kazanç (Düşecek Kartlar)',
+    potentialProfit: 'Tahmini Kazanç',
     cardPrices: 'Kart Fiyatları',
     noGames: 'Henüz taranmış oyun yok.',
     batchComplete: 'Paket Tamamlandı',
@@ -72,7 +72,7 @@ const translations = {
     subtitle: 'Find the most valuable trading cards in your library and maximize your profit.',
     urlLabel: 'Steam Profile URL or SteamID64',
     urlPlaceholder: 'e.g. https://steamcommunity.com/id/stancly/',
-    apiKeyLabel: 'Steam API Key (Optional)',
+    apiKeyLabel: 'Steam API Key',
     apiKeyPlaceholder: 'For faster discovery...',
     analyze: 'Scan Library',
     continue: 'Fetch Remaining',
@@ -80,7 +80,7 @@ const translations = {
     scanning: 'Scanning Library...',
     found: 'card games found',
     totalGames: 'Total Games',
-    potentialProfit: 'Est. Profit (Drops)',
+    potentialProfit: 'Est. Profit',
     cardPrices: 'Card Prices',
     noGames: 'No games scanned yet.',
     batchComplete: 'Batch Completed',
@@ -195,14 +195,12 @@ export default function SteamCardTracker() {
 
   return (
     <div className="min-h-screen bg-[#1b2838] text-[#c7d5e0] font-sans selection:bg-[#66c0f4]/30">
-      {/* Background Glow */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-[#66c0f4]/5 blur-[120px] rounded-full"></div>
         <div className="absolute top-[20%] -right-[10%] w-[30%] h-[30%] bg-[#2a475e]/10 blur-[100px] rounded-full"></div>
       </div>
 
       <div className="container max-w-6xl mx-auto px-4 py-8 relative">
-        {/* Header */}
         <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 bg-gradient-to-br from-[#66c0f4] to-[#2a475e] rounded-2xl flex items-center justify-center shadow-2xl rotate-3">
@@ -220,7 +218,6 @@ export default function SteamCardTracker() {
         </header>
 
         <div className="grid lg:grid-cols-12 gap-8">
-          {/* Sidebar / Controls */}
           <aside className="lg:col-span-4 space-y-6">
             <Card className="bg-[#0d121a]/60 backdrop-blur-xl border-white/5 shadow-2xl">
               <CardContent className="pt-6 space-y-4">
@@ -229,27 +226,21 @@ export default function SteamCardTracker() {
                     <User className="w-3 h-3" /> {t.urlLabel}
                   </label>
                   <div className="relative group">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8f98a0] group-focus-within:text-[#66c0f4] transition-colors" />
-                    <Input
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      placeholder={t.urlPlaceholder}
-                      className="pl-10 h-12 bg-[#171d25] border-white/5 focus:border-[#66c0f4]/50 transition-all text-white placeholder:text-[#4d535b]"
-                    />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8f98a0]" />
+                    <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t.urlPlaceholder} className="pl-10 h-12 bg-[#171d25] border-white/5 text-white" />
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[10px] uppercase font-black text-[#8f98a0] tracking-widest flex items-center gap-2">
-                    <Zap className="w-3 h-3" /> {t.apiKeyLabel}
-                  </label>
-                  <Input
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    type="password"
-                    placeholder={t.apiKeyPlaceholder}
-                    className="h-12 bg-[#171d25] border-white/5 focus:border-[#66c0f4]/50 transition-all text-white placeholder:text-[#4d535b]"
-                  />
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] uppercase font-black text-[#8f98a0] tracking-widest flex items-center gap-2">
+                      <Zap className="w-3 h-3" /> {t.apiKeyLabel}
+                    </label>
+                    <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noopener noreferrer" className="text-[9px] text-[#66c0f4] hover:underline font-bold">
+                      {lang === 'tr' ? 'Anahtar Al' : 'Get Key'}
+                    </a>
+                  </div>
+                  <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={t.apiKeyPlaceholder} className="h-12 bg-[#171d25] border-white/5 text-white" />
                 </div>
 
                 <div className="flex gap-2 pt-2">
@@ -262,8 +253,8 @@ export default function SteamCardTracker() {
                       <Button onClick={() => analyzeProfile(false)} variant="secondary" className="flex-1 h-12 font-bold uppercase tracking-tight border border-white/5">
                         {t.analyze}
                       </Button>
-                      <Button onClick={() => analyzeProfile(true)} className="flex-[1.5] h-12 bg-green-500 hover:bg-green-600 text-[#1b2838] font-bold uppercase tracking-tight shadow-lg shadow-green-500/20">
-                        <RefreshCw className="w-4 h-4 mr-2 animate-spin-slow" /> {t.continue}
+                      <Button onClick={() => analyzeProfile(true)} className="flex-[1.5] h-12 bg-green-500 hover:bg-green-600 text-[#1b2838] font-bold uppercase tracking-tight shadow-lg shadow-green-500/20 group">
+                        <RefreshCw className="w-4 h-4 mr-2 group-hover:rotate-180 transition-transform duration-500" /> {t.continue}
                       </Button>
                     </>
                   ) : (
@@ -275,16 +266,12 @@ export default function SteamCardTracker() {
               </CardContent>
             </Card>
 
-            {/* Profile Info Card */}
             {profile && (
               <Card className="bg-gradient-to-br from-[#171d25] to-[#0d121a] border-[#66c0f4]/20 shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div className="h-1 bg-[#66c0f4]"></div>
                 <CardContent className="pt-6 flex items-center gap-4">
                   <div className="relative">
                     <img src={profile.avatarUrl} alt={profile.personaName} className="w-16 h-16 rounded-xl border-2 border-white/10 shadow-xl" />
-                    <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-[#66c0f4] rounded-full flex items-center justify-center border-2 border-[#1b2838]">
-                      <CheckCircle2 className="w-3 h-3 text-[#1b2838]" />
-                    </div>
                   </div>
                   <div>
                     <h3 className="font-black text-white text-lg leading-tight uppercase truncate max-w-[180px]">{profile.personaName}</h3>
@@ -304,7 +291,6 @@ export default function SteamCardTracker() {
               </Card>
             )}
 
-            {/* Global Stats */}
             {games.length > 0 && (
               <div className="p-6 rounded-2xl bg-gradient-to-br from-[#66c0f4]/20 to-transparent border border-[#66c0f4]/10 shadow-inner">
                 <div className="flex items-center gap-3 mb-2">
@@ -312,19 +298,31 @@ export default function SteamCardTracker() {
                   <span className="text-[10px] uppercase font-black tracking-widest text-[#8f98a0]">{t.potentialProfit}</span>
                 </div>
                 <div className="text-4xl font-black text-white tracking-tighter flex items-center gap-2">
-                  {totalPot.toFixed(2)} <span className="text-lg font-bold text-green-400">TL</span>
+                  {totalPot.toFixed(2)} <span className="text-lg font-bold text-green-400">$</span>
                 </div>
               </div>
             )}
+
+            <Card className="bg-[#0d121a]/40 border-dashed border-white/10 hover:border-[#66c0f4]/30 transition-colors cursor-pointer group">
+              <a href="#" className="block p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center group-hover:bg-[#66c0f4]/20 transition-colors">
+                    <Trophy className="w-5 h-5 text-[#8f98a0] group-hover:text-[#66c0f4]" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-white uppercase tracking-tight">Support Me</h4>
+                    <p className="text-[10px] text-[#8f98a0]">Buy me a coffee or donate skin.</p>
+                  </div>
+                </div>
+              </a>
+            </Card>
           </aside>
 
-          {/* Main Results Area */}
           <main className="lg:col-span-8 space-y-6">
             {loading && (
-              <div className="p-8 rounded-3xl bg-[#0d121a]/40 border border-white/5 flex flex-col items-center justify-center text-center animate-in fade-in zoom-in-95 duration-300">
+              <div className="p-8 rounded-3xl bg-[#0d121a]/40 border border-white/5 flex flex-col items-center justify-center text-center">
                 <div className="relative w-20 h-20 mb-6">
                   <div className="absolute inset-0 rounded-full border-4 border-[#66c0f4]/20 border-t-[#66c0f4] animate-spin"></div>
-                  <div className="absolute inset-3 rounded-full border-4 border-[#2a475e]/40 border-b-[#2a475e] animate-spin-reverse"></div>
                 </div>
                 <h2 className="text-xl font-bold text-white mb-2">{statusMessage}</h2>
                 {progress && (
@@ -346,25 +344,6 @@ export default function SteamCardTracker() {
               </div>
             )}
 
-            {/* Batch Complete Prompt */}
-            {!loading && progress && progress.current < progress.total && (
-              <div className="p-8 rounded-3xl bg-gradient-to-br from-green-500/20 via-green-500/5 to-transparent border border-green-500/20 flex flex-col md:flex-row items-center gap-6 shadow-2xl animate-in slide-in-from-top-6 duration-700">
-                <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0 animate-pulse">
-                  <Zap className="w-8 h-8 text-green-400" />
-                </div>
-                <div className="flex-1 text-center md:text-left">
-                  <h3 className="text-lg font-black text-white uppercase tracking-tight flex items-center justify-center md:justify-start gap-2">
-                    {t.batchComplete} <Badge variant="outline" className="text-green-400 border-green-400/30 text-[10px]">100/100</Badge>
-                  </h3>
-                  <p className="text-sm text-green-100/60 mt-1">{t.batchDesc}</p>
-                </div>
-                <Button onClick={() => analyzeProfile(true)} size="lg" className="bg-green-500 hover:bg-green-600 text-[#1b2838] font-black uppercase px-8 py-7 text-base shadow-xl shadow-green-500/30 group">
-                  <RefreshCw className="w-5 h-5 mr-3 group-hover:rotate-180 transition-all duration-500" /> {t.continue}
-                </Button>
-              </div>
-            )}
-
-            {/* Game List */}
             <div className="space-y-4">
               {games.length === 0 && !loading && !error && (
                 <div className="py-32 flex flex-col items-center justify-center text-center opacity-30 select-none">
@@ -376,56 +355,43 @@ export default function SteamCardTracker() {
               )}
 
               {games.map((game, idx) => (
-                <Card
-                  key={game.appId}
-                  className={`bg-[#0d121a]/60 border-white/5 overflow-hidden transition-all duration-300 hover:border-[#66c0f4]/30 hover:shadow-2xl hover:shadow-[#66c0f4]/5 animate-in fade-in slide-in-from-right-4 duration-500`}
-                  style={{ animationDelay: `${Math.min(idx * 50, 1000)}ms` }}
-                >
+                <Card key={game.appId} className="bg-[#0d121a]/60 border-white/5 overflow-hidden">
                   <CardContent className="p-0">
                     <div className="p-4 flex items-center gap-4">
                       <div className="relative group flex-shrink-0">
-                        <img
-                          src={game.gameIconUrl}
-                          alt={game.gameName}
-                          className="w-32 h-[48px] rounded-lg object-cover shadow-lg border border-white/5 transition-transform group-hover:scale-105"
-                          onError={(e) => { (e.target as any).src = "https://community.akamai.steamstatic.com/economy/image/-9a81dlWLwJ2UUGcVs_nsVtzdOEdtWwKGZZLQHTxDZ7I56KU0jsspYwfKEZDP_mHBA5fGo_u_Z-C6R5-S49K_O18386Y_F16f-g9621o5P_OfA" }}
-                        />
-                        <div className="absolute top-1 right-1 px-1.5 py-0.5 bg-black/80 rounded text-[9px] font-black text-[#66c0f4] backdrop-blur-sm">
-                          {game.totalNormalCards} {t.cardPrices.split(' ')[0]}
-                        </div>
+                        <img src={game.gameIconUrl} alt={game.gameName} className="w-32 h-[48px] rounded-lg object-cover" />
                       </div>
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
                           <h3 className="font-bold text-white text-base leading-tight truncate uppercase italic">{game.gameName}</h3>
-                          <a
-                            href={`https://steamcommunity.com/market/search?appid=753&q=tag_app_${game.appId}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="bg-white/5 hover:bg-white/10 p-2 rounded-lg transition-colors flex-shrink-0"
-                          >
-                            <ExternalLink className="w-3 h-3 text-[#8f98a0] hover:text-[#66c0f4]" />
+                          <a href={`https://steamcommunity.com/market/search?appid=753&q=tag_app_${game.appId}`} target="_blank" rel="noopener noreferrer" className="bg-white/5 hover:bg-white/10 p-2 rounded-lg">
+                            <ExternalLink className="w-3 h-3 text-[#8f98a0]" />
                           </a>
                         </div>
                         <div className="flex items-center gap-4 mt-2">
                           <div className="flex flex-col">
-                            <span className="text-[9px] font-black uppercase text-[#8f98a0] tracking-tighter italic">{t.maxPrice}</span>
-                            <span className="text-sm font-black text-[#66c0f4]">{game.highestCardPrice.toFixed(2)} TL</span>
+                            <span className="text-[9px] font-black uppercase text-[#66c0f4] tracking-tighter italic">{t.maxPrice}</span>
+                            <span className="text-sm font-black text-[#66c0f4]">${game.highestCardPrice.toFixed(2)}</span>
                           </div>
                           <div className="w-px h-6 bg-white/5"></div>
                           <div className="flex flex-col">
                             <span className="text-[9px] font-black uppercase text-green-400 tracking-tighter italic">{t.potentialProfit}</span>
-                            <span className="text-sm font-black text-green-400">{game.droppableCardsValue.toFixed(2)} TL</span>
+                            <span className="text-sm font-black text-green-400">${game.droppableCardsValue.toFixed(2)}</span>
                           </div>
+                          {game.foilCards.length > 0 && (
+                            <>
+                              <div className="w-px h-6 bg-white/5"></div>
+                              <div className="flex flex-col">
+                                <span className="text-[9px] font-black uppercase text-yellow-500 tracking-tighter italic">Foil Price</span>
+                                <span className="text-sm font-black text-yellow-500">${Math.max(...game.foilCards.map(c => c.price)).toFixed(2)}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
 
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => toggleGame(game.appId)}
-                        className={`hover:bg-[#66c0f4]/10 transition-transform ${expandedGames.has(game.appId) ? 'rotate-180' : ''}`}
-                      >
+                      <Button variant="ghost" size="icon" onClick={() => toggleGame(game.appId)} className={expandedGames.has(game.appId) ? 'rotate-180' : ''}>
                         <ChevronDown className="w-5 h-5 text-[#8f98a0]" />
                       </Button>
                     </div>
@@ -437,7 +403,7 @@ export default function SteamCardTracker() {
                             <div key={i} className="group relative bg-[#171d25] rounded-xl p-2 border border-white/5 hover:border-[#66c0f4]/30 transition-all text-center">
                               <img src={card.imageUrl} alt={card.name} className="w-full aspect-square rounded-lg mb-2 shadow-inner" />
                               <p className="text-[9px] text-[#8f98a0] truncate mb-0.5">{card.name}</p>
-                              <p className="text-[10px] font-black text-white">{card.price.toFixed(2)} TL</p>
+                              <p className="text-[10px] font-black text-white">${card.price.toFixed(2)}</p>
                               {card.isFoil && (
                                 <Badge className="absolute top-1 right-1 bg-yellow-500/20 text-yellow-500 border-none text-[8px] p-0.5 px-1 font-black">FOIL</Badge>
                               )}
@@ -453,23 +419,6 @@ export default function SteamCardTracker() {
           </main>
         </div>
       </div>
-
-      <style jsx global>{`
-        @keyframes spin-slow {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        @keyframes spin-reverse {
-          from { transform: rotate(360deg); }
-          to { transform: rotate(0deg); }
-        }
-        .animate-spin-slow {
-          animation: spin-slow 3s linear infinite;
-        }
-        .animate-spin-reverse {
-          animation: spin-reverse 1.5s linear infinite;
-        }
-      `}</style>
     </div>
   )
 }
