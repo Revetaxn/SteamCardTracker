@@ -763,6 +763,16 @@ export default function Home() {
                     <Button onClick={cancelAnalysis} className="bg-red-500/80 hover:bg-red-600 text-white font-semibold h-11 px-6">
                       <X className="w-4 h-4 mr-2" />{t('cancel')}
                     </Button>
+                  ) : progress && progress.current < progress.total ? (
+                    <div className="flex gap-2">
+                      <Button onClick={() => analyzeProfile()} disabled={!url.trim()} className="bg-[#2a475e]/80 hover:bg-[#2a475e] text-[#66c0f4] font-semibold h-11 px-6 border border-[#66c0f4]/20">
+                        <RefreshCw className="w-4 h-4 mr-2" />{t('analyze')}
+                      </Button>
+                      <Button onClick={() => analyzeProfile(true)} className="bg-green-500 hover:bg-green-600 text-[#1b2838] font-bold h-11 px-8 shadow-lg shadow-green-500/20 group">
+                        <RefreshCw className="w-4 h-4 mr-2 group-hover:rotate-180 transition-transform duration-500" />
+                        {t('fetchRemaining')}
+                      </Button>
+                    </div>
                   ) : (
                     <Button onClick={analyzeProfile} disabled={!url.trim()} className="bg-[#66c0f4] hover:bg-[#4fa3d6] text-[#1b2838] font-semibold h-11 px-6 disabled:opacity-50">
                       <TrendingUp className="w-4 h-4 mr-2" />{t('analyze')}
@@ -1052,21 +1062,10 @@ export default function Home() {
                     )}
 
                     {!loading && progress && progress.current < progress.total && (
-                      <div className="py-8 flex flex-col items-center gap-4 bg-gradient-to-b from-[#66c0f4]/10 to-transparent rounded-lg border border-[#66c0f4]/20 mt-4 px-6 text-center">
-                        <div className="w-12 h-12 rounded-full bg-[#66c0f4]/20 flex items-center justify-center animate-pulse">
-                          <Zap className="w-6 h-6 text-[#66c0f4]" />
+                      <div className="py-6 flex flex-col items-center gap-2 bg-[#66c0f4]/5 rounded-lg border border-[#66c0f4]/10 mt-4 px-6 text-center">
+                        <div className="text-xs text-[#8f98a0]">
+                          Paket tamamlandı. Devam etmek için yukarıdaki <strong className="text-green-400">"{t('fetchRemaining')}"</strong> butonuna basın.
                         </div>
-                        <div className="space-y-1">
-                          <h4 className="text-sm font-bold text-[#c7d5e0]">100 Oyunluk Paket Tamamlandı</h4>
-                          <p className="text-xs text-[#8f98a0]">
-                            Steam limitlerine takılmamak için taramaya kısa bir ara verdik.
-                            Devam ederek sonraki paketleri tarayabilirsin. ({progress.current}/{progress.total})
-                          </p>
-                        </div>
-                        <Button onClick={() => analyzeProfile(true)} size="lg" className="bg-[#66c0f4] hover:bg-[#4fa3d6] text-[#1b2838] font-bold px-8 shadow-lg shadow-[#66c0f4]/20 group">
-                          <RefreshCw className="w-4 h-4 mr-2 group-hover:rotate-180 transition-transform duration-500" />
-                          {t('fetchRemaining')}
-                        </Button>
                       </div>
                     )}
                   </div>
