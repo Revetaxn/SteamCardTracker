@@ -730,24 +730,33 @@ export async function POST(request: NextRequest) {
 
         const allLibraryAppIds = Array.from(libraryMap.keys())
 
-        // Deep scan: use Store API to find ALL games with cards (including unplayed)
-        const confirmedCardAppIds = await checkGamesForCards(allLibraryAppIds, (current, total) => {
-          if (current % 50 === 0 || current === total) {
-            send({
-              type: 'status',
-              message: `Kütüphane taranıyor: ${current}/${total} oyun kontrol edildi...`
-            })
-          }
-        })
+        // Start with appIDs already confirmed from Badges scan
+        const badgeConfirmedIds = cardEligibleGames.map(g => g.appId)
+        const confirmedCardAppIds = [...badgeConfirmedIds]
+
+        // Only hit Store API for games NOT already found in badges
+        const remainingToScan = allLibraryAppIds.filter(id => !badgeConfirmedIds.includes(id))
+
+        if (remainingToScan.length > 0) {
+          const additionalIds = await checkGamesForCards(remainingToScan, (current, total) => {
+            if (current % 50 === 0 || current === total) {
+              send({
+                type: 'status',
+                message: `Kütüphane taranıyor: ${current}/${total} oyun ek kontrol ediliyor...`
+              })
+            }
+          })
+          confirmedCardAppIds.push(...additionalIds)
+        }
 
         // Build the final allGames list
-        allGames = confirmedCardAppIds.map(appId => ({
+        allGames = Array.from(new Set(confirmedCardAppIds)).map(appId => ({
           appId,
           gameName: libraryMap.get(appId) || `Game ${appId}`,
-          hasCardDrops: true // If confirmed via Store API
+          hasCardDrops: true
         }))
 
-        scanMethod = apiOwnedGames.length > 0 ? 'api_plus_store_scan' : 'store_scan'
+        scanMethod = apiOwnedGames.length > 0 ? 'api_plus_store_scan' : 'badges_plus_store'
         send({ type: 'status', message: `${allGames.length} kartlı oyun tespit edildi. Fiyatlar alınıyor...` })
 
         if (allGames.length === 0) {
