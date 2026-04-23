@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react'
 import {
   TrendingUp, Search, RefreshCw, X, Layout,
   ExternalLink, Info, Loader2, Zap, Trophy,
@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 // ===== TYPES =====
 interface CardInfo {
@@ -45,31 +46,31 @@ interface ProfileInfo {
 
 const translations = {
   tr: {
-    title: 'Steam Kart Takipçisi',
+    title: 'STC PLATINUM',
     subtitle: 'Kütüphaneni saniyeler içinde tara.',
-    urlPlaceholder: 'Steam Profil URL veya ID',
+    urlPlaceholder: 'Profil URL veya ID',
     apiKeyPlaceholder: 'API Anahtarı',
-    analyze: 'Tara',
-    continue: 'Kalanlar',
+    analyze: 'TARA',
+    continue: 'DEVAM ET',
     scanning: 'Taranıyor...',
     progress: 'Kütüphane İlerlemesi',
     potentialProfit: 'Top. Kazanç',
     topFoil: 'En Değerli Foil',
-    normalAvg: 'Ort. Kart',
+    getKey: 'Anahtar Al',
     noGames: 'Henüz tarama yapılmadı.'
   },
   en: {
-    title: 'Steam Card Tracker',
+    title: 'STC PLATINUM',
     subtitle: 'Scan your library in seconds.',
-    urlPlaceholder: 'Steam Profile URL or ID',
+    urlPlaceholder: 'Profile URL or ID',
     apiKeyPlaceholder: 'API Key',
-    analyze: 'Scan',
-    continue: 'Continue',
+    analyze: 'SCAN',
+    continue: 'CONTINUE',
     scanning: 'Scanning...',
     progress: 'Library Progress',
     potentialProfit: 'Total Profit',
     topFoil: 'Top Foil',
-    normalAvg: 'Avg. Card',
+    getKey: 'Get Key',
     noGames: 'No games scanned yet.'
   }
 }
@@ -86,6 +87,9 @@ export default function SteamCardTracker() {
   const [progress, setProgress] = useState<{ current: number, total: number, foundInLib: number } | null>(null)
   const [statusMessage, setStatusMessage] = useState('')
   const [expandedGames, setExpandedGames] = useState<Set<number>>(new Set())
+  const [isClient, setIsClient] = useState(false)
+
+  useEffect(() => { setIsClient(true) }, [])
 
   const abortControllerRef = useRef<AbortController | null>(null)
 
@@ -136,9 +140,9 @@ export default function SteamCardTracker() {
             const data = JSON.parse(line.slice(6))
             if (data.type === 'status') setStatusMessage(data.message)
             if (data.type === 'progress') setProgress(p => ({
-              current: (isMore ? (p?.current || 0) : 0) + data.current,
-              total: data.total,
-              foundInLib: data.found
+              current: (isMore ? (p?.current || 0) : 0) + (data.current || 0),
+              total: data.total || 0,
+              foundInLib: data.found || 0
             }))
             if (data.type === 'game') {
               setGames(prev => {
@@ -164,183 +168,195 @@ export default function SteamCardTracker() {
 
   const totalPot = useMemo(() => games.reduce((acc, g) => acc + g.droppableCardsValue + g.foilCardsValue, 0), [games])
 
+  if (!isClient) return null // Prevent hydration mismatch
+
   return (
-    <div className="min-h-screen bg-[#0d121a] text-[#c7d5e0] font-sans selection:bg-[#66c0f4]/20">
-      <div className="fixed inset-0 overflow-hidden pointer-events-none opacity-20">
-        <div className="absolute top-[10%] left-[10%] w-[30%] h-[30%] bg-[#66c0f4] blur-[150px] rounded-full"></div>
-      </div>
-
-      <div className="container max-w-5xl mx-auto px-4 py-12 relative">
-        {/* Minimal Header */}
-        <div className="flex flex-col md:flex-row justify-between items-end mb-12 gap-8">
-          <div className="space-y-1">
-            <div className="flex items-center gap-3">
-              <TrendingUp className="w-6 h-6 text-[#66c0f4]" />
-              <h1 className="text-2xl font-black tracking-tight text-white uppercase italic">STC PLATINUM</h1>
-            </div>
-            <p className="text-sm font-medium text-[#8f98a0]">{t.subtitle}</p>
-          </div>
-
-          <div className="w-full md:w-auto flex flex-col md:flex-row gap-4">
-            <div className="flex bg-[#171d25] rounded-xl p-1 border border-white/5 h-12 items-center px-4 gap-4 flex-1">
-              <Globe className="w-4 h-4 text-[#4d535b]" />
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t.urlPlaceholder} className="border-none bg-transparent h-full text-sm text-white focus-visible:ring-0 placeholder:text-[#4d535b] p-0 w-48" />
-              <div className="w-px h-6 bg-white/10"></div>
-              <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={t.apiKeyPlaceholder} className="border-none bg-transparent h-full text-sm text-white focus-visible:ring-0 placeholder:text-[#4d535b] p-0 w-32" />
-            </div>
-            <div className="flex gap-2">
-              {loading ? (
-                <Button onClick={() => abortControllerRef.current?.abort()} variant="destructive" className="h-12 w-12 rounded-xl border border-white/5 p-0">
-                  <X className="w-5 h-5" />
-                </Button>
-              ) : (
-                <Button onClick={() => analyzeProfile(false)} className="h-12 bg-[#66c0f4] hover:bg-[#4fa3d3] text-[#1b2838] font-black px-8 rounded-xl shadow-lg shadow-[#66c0f4]/10 uppercase transition-all active:scale-95">
-                  {t.analyze}
-                </Button>
-              )}
-              {!loading && progress && progress.current < progress.total && (
-                <Button onClick={() => analyzeProfile(true)} className="h-12 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black px-8 rounded-xl shadow-lg shadow-green-500/10 uppercase animate-pulse">
-                  {t.continue}
-                </Button>
-              )}
-            </div>
-          </div>
+    <TooltipProvider>
+      <div className="min-h-screen bg-[#0d121a] text-[#c7d5e0] font-sans selection:bg-[#66c0f4]/20">
+        <div className="fixed inset-0 overflow-hidden pointer-events-none opacity-20">
+          <div className="absolute top-[10%] left-[10%] w-[30%] h-[30%] bg-[#66c0f4] blur-[150px] rounded-full"></div>
         </div>
 
-        {/* Real-time Dashboard */}
-        {progress && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12 animate-in fade-in slide-in-from-top-4 duration-700">
-            <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.progress}</span>
-                  <span className="text-xs font-mono text-[#66c0f4]">{progress.current} / {progress.total}</span>
+        <div className="container max-w-5xl mx-auto px-4 py-12 relative">
+          {/* Header */}
+          <div className="flex flex-col md:flex-row justify-between items-end mb-12 gap-8">
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <TrendingUp className="w-6 h-6 text-[#66c0f4]" />
+                <h1 className="text-2xl font-black italic tracking-tight text-white uppercase">{t.title}</h1>
+                <div className="flex bg-[#171d25] rounded-lg p-0.5 border border-white/5 ml-4">
+                  <button onClick={() => setLang('tr')} className={`px-3 py-1 rounded-md text-[10px] font-black transition-all ${lang === 'tr' ? 'bg-[#66c0f4] text-[#1b2838]' : 'hover:text-white'}`}>TR</button>
+                  <button onClick={() => setLang('en')} className={`px-3 py-1 rounded-md text-[10px] font-black transition-all ${lang === 'en' ? 'bg-[#66c0f4] text-[#1b2838]' : 'hover:text-white text-[#4d535b]'}`}>EN</button>
                 </div>
-                <Progress value={(progress.current / progress.total) * 100} className="h-1.5 bg-white/5 [&>div]:bg-[#66c0f4]" />
-                <p className="text-[9px] mt-3 font-bold opacity-40 uppercase truncate italic">{statusMessage}</p>
-              </CardContent>
-            </Card>
+              </div>
+              <p className="text-sm font-medium text-[#8f98a0]">{t.subtitle}</p>
+            </div>
 
-            <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
-              <CardContent className="p-6">
-                <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">Library Scan Status</span>
-                <div className="flex items-end gap-3 mt-2">
-                  <div className="text-3xl font-black text-white italic">{progress.foundInLib}</div>
-                  <div className="text-[10px] font-bold text-[#8f98a0] mb-1.5 uppercase">Owned Games</div>
+            <div className="w-full md:w-auto space-y-2">
+              <div className="flex flex-col md:flex-row gap-4">
+                <div className="flex bg-[#171d25] rounded-xl p-1 border border-white/5 h-12 items-center px-4 gap-4 flex-1">
+                  <Globe className="w-4 h-4 text-[#4d535b]" />
+                  <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t.urlPlaceholder} className="border-none bg-transparent h-full text-sm text-white focus-visible:ring-0 placeholder:text-[#4d535b] p-0 w-48" />
+                  <div className="w-px h-6 bg-white/10"></div>
+                  <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={t.apiKeyPlaceholder} className="border-none bg-transparent h-full text-sm text-white focus-visible:ring-0 placeholder:text-[#4d535b] p-0 w-32" />
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-[#66c0f4]/10 border-[#66c0f4]/10 backdrop-blur-xl">
-              <CardContent className="p-6">
-                <span className="text-[10px] font-black uppercase tracking-widest text-[#66c0f4]/70">{t.potentialProfit}</span>
-                <div className="flex items-end gap-2 mt-2">
-                  <div className="text-3xl font-black text-green-400 italic">${totalPot.toFixed(2)}</div>
-                  <div className="text-[10px] font-bold text-green-400 mb-1.5 uppercase tracking-widest">USD</div>
+                <div className="flex gap-2">
+                  {loading ? (
+                    <Button onClick={() => abortControllerRef.current?.abort()} variant="destructive" className="h-12 w-12 rounded-xl border border-white/5 p-0">
+                      <X className="w-5 h-5" />
+                    </Button>
+                  ) : (
+                    <Button onClick={() => analyzeProfile(false)} className="h-12 bg-[#66c0f4] hover:bg-[#4fa3d3] text-[#1b2838] font-black px-8 rounded-xl shadow-lg shadow-[#66c0f4]/10 uppercase transition-all">
+                      {t.analyze}
+                    </Button>
+                  )}
+                  {!loading && progress && progress.current < progress.total && (
+                    <Button onClick={() => analyzeProfile(true)} className="h-12 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black px-8 rounded-xl shadow-lg shadow-green-500/10 uppercase animate-pulse">
+                      {t.continue}
+                    </Button>
+                  )}
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+              <div className="flex justify-end">
+                <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#66c0f4] hover:underline font-black flex items-center gap-1.5 uppercase tracking-tighter">
+                  <Zap className="w-3 h-3" /> {t.getKey}
+                </a>
+              </div>
+            </div>
           </div>
-        )}
 
-        {/* Main List */}
-        <div className="space-y-3">
-          {games.length === 0 && !loading && !error && (
-            <div className="py-40 flex flex-col items-center opacity-20 select-none">
-              <Gamepad2 className="w-16 h-16 mb-4" />
-              <p className="font-black uppercase tracking-[0.3em] text-xs">{t.noGames}</p>
-            </div>
-          )}
-
-          {error && (
-            <div className="text-center p-6 border border-red-500/20 bg-red-500/5 rounded-2xl animate-in zoom-in-95 duration-300">
-              <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
-              <p className="text-sm font-bold text-red-400 uppercase italic">{error}</p>
-            </div>
-          )}
-
-          {games.map((game, idx) => (
-            <Card key={game.appId} className="bg-[#171d25]/40 border-white/5 hover:border-[#66c0f4]/20 transition-all duration-300 overflow-hidden group">
-              <CardContent className="p-3 flex items-center gap-6">
-                <img src={game.gameIconUrl} className="w-24 h-10 object-cover rounded-md flex-shrink-0 grayscale group-hover:grayscale-0 transition-all duration-500" />
-
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-black text-white truncate uppercase italic tracking-tight">{game.gameName}</h3>
-                  <div className="flex items-center gap-6 mt-1.5">
-                    <div className="flex flex-col">
-                      <span className="text-[8px] font-black text-[#8f98a0] uppercase tracking-tighter">Normal Drop</span>
-                      <span className="text-xs font-black text-[#66c0f4]">${game.droppableCardsValue.toFixed(2)}</span>
-                    </div>
-                    {game.foilCards.length > 0 && (
-                      <>
-                        <div className="w-px h-4 bg-white/5"></div>
-                        <div className="flex flex-col">
-                          <span className="text-[8px] font-black text-yellow-500/70 uppercase tracking-tighter">Top Foil</span>
-                          <span className="text-xs font-black text-yellow-500">${game.foilCardsValue.toFixed(2)}</span>
-                        </div>
-                      </>
-                    )}
+          {/* Dashboard */}
+          {progress && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12 animate-in fade-in slide-in-from-top-4 duration-700">
+              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.progress}</span>
+                    <span className="text-xs font-mono text-[#66c0f4] tracking-tight">{progress.current} / {progress.total}</span>
                   </div>
-                </div>
+                  <Progress value={(progress.current / (progress.total || 1)) * 100} className="h-1.5 bg-white/5 [&>div]:bg-[#66c0f4]" />
+                  <p className="text-[9px] mt-3 font-bold opacity-40 uppercase truncate italic">{statusMessage}</p>
+                </CardContent>
+              </Card>
 
-                <div className="flex items-center gap-3">
-                  <TooltipProvider>
+              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
+                <CardContent className="p-6">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">Owned Games</span>
+                  <div className="flex items-end gap-3 mt-2">
+                    <div className="text-3xl font-black text-white italic">{progress.foundInLib}</div>
+                    <div className="text-[10px] font-bold text-[#8f98a0] mb-1.5 uppercase">Library Count</div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-[#66c0f4]/10 border-[#66c0f4]/10 backdrop-blur-xl">
+                <CardContent className="p-6">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#66c0f4]/70">{t.potentialProfit}</span>
+                  <div className="flex items-end gap-2 mt-2">
+                    <div className="text-3xl font-black text-green-400 italic">${totalPot.toFixed(2)}</div>
+                    <div className="text-[10px] font-bold text-green-400 mb-1.5 uppercase tracking-widest">USD</div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* List */}
+          <div className="space-y-3">
+            {games.length === 0 && !loading && !error && (
+              <div className="py-40 flex flex-col items-center opacity-20 select-none">
+                <Gamepad2 className="w-16 h-16 mb-4" />
+                <p className="font-black uppercase tracking-[0.3em] text-xs">{t.noGames}</p>
+              </div>
+            )}
+
+            {error && (
+              <div className="text-center p-6 border border-red-500/20 bg-red-500/5 rounded-2xl animate-in zoom-in-95 duration-300">
+                <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
+                <p className="text-sm font-bold text-red-400 uppercase italic">{error}</p>
+              </div>
+            )}
+
+            {games.map((game, idx) => (
+              <Card key={game.appId} className="bg-[#171d25]/40 border-white/5 hover:border-[#66c0f4]/20 transition-all duration-300 overflow-hidden group">
+                <CardContent className="p-3 flex items-center gap-6">
+                  <img src={game.gameIconUrl} alt={game.gameName} className="w-24 h-10 object-cover rounded-md flex-shrink-0 grayscale group-hover:grayscale-0 transition-all duration-500" />
+
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-black text-white truncate uppercase italic tracking-tight">{game.gameName}</h3>
+                    <div className="flex items-center gap-6 mt-1.5">
+                      <div className="flex flex-col">
+                        <span className="text-[8px] font-black text-[#8f98a0] uppercase tracking-tighter italic">Normal Drops</span>
+                        <span className="text-xs font-black text-[#66c0f4]">${game.droppableCardsValue.toFixed(2)}</span>
+                      </div>
+                      {game.foilCards.length > 0 && (
+                        <>
+                          <div className="w-px h-4 bg-white/5"></div>
+                          <div className="flex flex-col">
+                            <span className="text-[8px] font-black text-yellow-500/70 uppercase tracking-tighter italic">{t.topFoil}</span>
+                            <span className="text-xs font-black text-yellow-500">${game.foilCardsValue.toFixed(2)}</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <a href={`https://steamcommunity.com/market/search?q=${encodeURIComponent(game.gameName)}&appid=753`} target="_blank" className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-all">
                           <ExternalLink className="w-4 h-4 text-[#4d535b] group-hover:text-[#66c0f4]" />
                         </a>
                       </TooltipTrigger>
-                      <TooltipContent className="bg-[#171d25] border-white/10 text-white text-[10px] font-black uppercase">Market</TooltipContent>
+                      <TooltipContent className="bg-[#171d25] border-white/10 text-white text-[10px] font-black uppercase">Steam Market</TooltipContent>
                     </Tooltip>
-                  </TooltipProvider>
 
-                  <Button variant="ghost" size="icon" onClick={() => toggleGame(game.appId)} className={`rounded-xl transition-transform h-10 w-10 ${expandedGames.has(game.appId) ? 'rotate-180 bg-white/5' : ''}`}>
-                    <ChevronDown className="w-5 h-5 text-[#4d535b]" />
-                  </Button>
-                </div>
-              </CardContent>
-
-              {expandedGames.has(game.appId) && (
-                <div className="px-6 pb-6 pt-2 border-t border-white/5 bg-black/20 animate-in slide-in-from-top-2 duration-300">
-                  <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-3">
-                    {[...game.normalCards, ...game.foilCards].sort((a, b) => b.price - a.price).map((card, i) => (
-                      <div key={i} className="space-y-2 text-center group/card">
-                        <div className="relative aspect-square overflow-hidden rounded-lg bg-[#1b2838] border border-white/5 group-hover/card:border-[#66c0f4]/30 transition-all">
-                          <img src={card.imageUrl} className="w-full h-full object-cover scale-110 group-hover/card:scale-100 transition-transform duration-500" />
-                          {card.isFoil && <Badge className="absolute top-1 right-1 bg-yellow-500 text-[#1b2838] text-[8px] font-black border-none h-4 px-1">FOIL</Badge>}
-                        </div>
-                        <p className="text-[10px] font-black text-white italic truncate">${card.price.toFixed(2)}</p>
-                      </div>
-                    ))}
+                    <Button variant="ghost" size="icon" onClick={() => toggleGame(game.appId)} className={`rounded-xl transition-transform h-10 w-10 ${expandedGames.has(game.appId) ? 'rotate-180 bg-white/5' : ''}`}>
+                      <ChevronDown className="w-5 h-5 text-[#4d535b]" />
+                    </Button>
                   </div>
-                </div>
-              )}
-            </Card>
-          ))}
-        </div>
+                </CardContent>
 
-        {/* Footer Support */}
-        <div className="mt-20 border-t border-white/5 pt-12 flex flex-col md:flex-row justify-between items-center gap-8">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#66c0f4] to-[#2a475e] p-2 rotate-3">
-              <Trophy className="w-full h-full text-[#1b2838]" />
-            </div>
-            <p className="text-xs font-black uppercase tracking-widest text-[#4d535b]">Support Revetax</p>
+                {expandedGames.has(game.appId) && (
+                  <div className="px-6 pb-6 pt-2 border-t border-white/5 bg-black/20 animate-in slide-in-from-top-2 duration-300">
+                    <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-3">
+                      {[...game.normalCards, ...game.foilCards].sort((a, b) => b.price - a.price).map((card, i) => (
+                        <div key={i} className="space-y-2 text-center group/card">
+                          <div className="relative aspect-square overflow-hidden rounded-lg bg-[#1b2838] border border-white/5 group-hover/card:border-[#66c0f4]/30 transition-all shadow-inner">
+                            <img src={card.imageUrl} alt={card.name} className="w-full h-full object-cover scale-110 group-hover/card:scale-100 transition-transform duration-500" />
+                            {card.isFoil && <Badge className="absolute top-1 right-1 bg-yellow-500 text-[#1b2838] text-[8px] font-black border-none h-4 px-1">FOIL</Badge>}
+                          </div>
+                          <p className="text-[10px] font-black text-white italic truncate tracking-tighter">${card.price.toFixed(2)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            ))}
           </div>
 
-          <div className="flex gap-4">
-            <a href="https://store.steampowered.com/wishlist/id/Revetaxn/" target="_blank" className="h-12 px-8 rounded-xl bg-white/5 border border-white/5 hover:border-[#66c0f4]/30 flex items-center gap-3 transition-all group">
-              <Star className="w-4 h-4 text-[#4d535b] group-hover:text-yellow-500" />
-              <span className="text-[10px] font-black uppercase tracking-tighter text-white">Wishlist</span>
-            </a>
-            <a href="https://steamcommunity.com/tradeoffer/new/?partner=75521086&token=4YxxBXfy" target="_blank" className="h-12 px-8 rounded-xl bg-white/5 border border-white/5 hover:border-[#66c0f4]/30 flex items-center gap-3 transition-all group">
-              <RefreshCw className="w-4 h-4 text-[#4d535b] group-hover:text-[#66c0f4]" />
-              <span className="text-[10px] font-black uppercase tracking-tighter text-white">Trade Offer</span>
-            </a>
+          <div className="mt-20 border-t border-white/5 pt-12 flex flex-col md:flex-row justify-between items-center gap-8 opacity-60 hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#66c0f4] to-[#2a475e] p-2 rotate-3 shadow-xl">
+                <Trophy className="w-full h-full text-[#1b2838]" />
+              </div>
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-[#8f98a0]">Support Revetax</p>
+            </div>
+
+            <div className="flex gap-4">
+              <a href="https://store.steampowered.com/wishlist/id/Revetaxn/" target="_blank" className="h-12 px-8 rounded-xl bg-white/5 border border-white/5 hover:border-[#66c0f4]/30 flex items-center gap-3 transition-all group">
+                <Star className="w-4 h-4 text-[#4d535b] group-hover:text-yellow-500" />
+                <span className="text-[10px] font-black uppercase tracking-tighter text-white">Wishlist</span>
+              </a>
+              <a href="https://steamcommunity.com/tradeoffer/new/?partner=75521086&token=4YxxBXfy" target="_blank" className="h-12 px-8 rounded-xl bg-white/5 border border-white/5 hover:border-[#66c0f4]/30 flex items-center gap-3 transition-all group">
+                <RefreshCw className="w-4 h-4 text-[#4d535b] group-hover:text-[#66c0f4]" />
+                <span className="text-[10px] font-black uppercase tracking-tighter text-white">Trade Offer</span>
+              </a>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   )
 }
