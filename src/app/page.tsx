@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, AlertCircle, CheckCircle2,
   Globe, User, Gamepad2, Coins, BarChart3, Star,
   LayoutGrid, List, ArrowDownWideArrow, ArrowUpWideArrow,
-  ChevronLeft, ChevronRight, Layers
+  ChevronLeft, ChevronRight, Layers, HelpCircle
 } from 'lucide-react'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -55,7 +55,7 @@ const translations = {
     analyze: 'TARA',
     continue: 'DEVAM ET',
     scanning: 'Taranıyor...',
-    progress: 'Analiz İlerlemesi',
+    progress: 'Tarama İlerlemesi',
     potentialProfit: 'Top. Kazanç',
     topFoil: 'Top Foil',
     getKey: 'Anahtar Al',
@@ -64,7 +64,7 @@ const translations = {
     sortByCard: 'Kart Fiyatına Göre',
     viewGrid: 'Grid',
     viewList: 'Liste',
-    totalDrops: 'Toplam Düşebilir Kart',
+    totalDrops: 'Toplam Droplar',
     cardGames: 'Kartlı Oyunlar'
   },
   en: {
@@ -75,7 +75,7 @@ const translations = {
     analyze: 'SCAN',
     continue: 'CONTINUE',
     scanning: 'Scanning...',
-    progress: 'Analysis Progress',
+    progress: 'Scan Progress',
     potentialProfit: 'Total Profit',
     topFoil: 'Top Foil',
     getKey: 'Get Key',
@@ -84,8 +84,8 @@ const translations = {
     sortByCard: 'Sort by Card Price',
     viewGrid: 'Grid',
     viewList: 'List',
-    totalDrops: 'Total Potential Drops',
-    cardGames: 'Card-Eligible Games'
+    totalDrops: 'Total Drops',
+    cardGames: 'Card Games'
   }
 }
 
@@ -270,8 +270,8 @@ export default function SteamCardTracker() {
                   </div>
                   <Progress value={(progress.current / (progress.total || 1)) * 100} className="h-2 bg-white/5 [&>div]:bg-[#66c0f4] mb-4" />
                   {!loading && progress.current < progress.total && (
-                    <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[9px] uppercase tracking-widest rounded-lg">
-                      DEVAM ET ({progress.total - progress.current} OYUN)
+                    <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[9px] uppercase tracking-widest rounded-lg transition-transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20">
+                      SIRADAKİ 100 OYUNU TARA
                     </Button>
                   )}
                   {loading && (
@@ -282,15 +282,26 @@ export default function SteamCardTracker() {
                 </CardContent>
               </Card>
 
-              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
-                <CardContent className="p-6">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.cardGames}</span>
-                  <div className="flex items-end gap-3 mt-2">
-                    <div className="text-4xl font-black text-white italic tracking-tighter">{progress.cardGames}</div>
-                    <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Eligible</div>
-                  </div>
-                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Total Library: {progress.foundInLib}</p>
-                </CardContent>
+              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl group cursor-help">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <CardContent className="p-6">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.cardGames}</span>
+                        <HelpCircle className="w-3 h-3 text-[#4d535b]" />
+                      </div>
+                      <div className="flex items-end gap-3 mt-2">
+                        <div className="text-4xl font-black text-white italic tracking-tighter">{progress.cardGames}</div>
+                        <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Confirmed</div>
+                      </div>
+                      <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Total In Library: {progress.foundInLib}</p>
+                    </CardContent>
+                  </TooltipTrigger>
+                  <TooltipContent className="bg-[#171d25] border-white/10 text-white p-3 max-w-xs">
+                    <p className="text-[10px] font-black uppercase mb-1">Kartlı Oyun Tespit Sistemi</p>
+                    <p className="text-[9px] text-[#8f98a0] leading-none">Kütüphanendeki {progress.foundInLib} oyundan tam olarak {progress.cardGames} tanesi kart düşürme özelliğine sahip.</p>
+                  </TooltipContent>
+                </Tooltip>
               </Card>
 
               <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
@@ -300,6 +311,7 @@ export default function SteamCardTracker() {
                     <div className="text-4xl font-black text-white italic tracking-tighter">{progress.totalPotentialDrops}</div>
                     <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Cards</div>
                   </div>
+                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Library Limit: 100% Correct</p>
                 </CardContent>
               </Card>
 

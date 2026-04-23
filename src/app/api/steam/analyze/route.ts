@@ -55,30 +55,26 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
   } catch { }
 
   // Tier 4: Infinite Badge/Card Scraper (THE SOURCE OF TRUTH FOR CARD DROPS)
-  let cardEligibleCount = 0
-  let totalPotentialDrops = 0
-
-  for (let p = 1; p <= 30; p++) { // Deep scan for large libraries
+  for (let p = 1; p <= 30; p++) {
     try {
       const html = await (await fetchWithTimeout(`${baseUrl}/badges/?p=${p}`.replace(/\/+/g, '/'))).text()
-      // Regex for badge rows which contain card info
       const rows = html.matchAll(/badge_row([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/sg)
       let foundOnPage = 0
       for (const row of rows) {
         const appIdMatch = row[1].match(/gamecards\/(\d+)/)
         const nameMatch = row[1].match(/badge_title">([\s\S]*?)(?:&nbsp;|<\/div>)/)
-
-        // Extract card set size to estimate drops: e.g. "4 of 8 cards collected" or "4 / 8 Kart toplandı"
         const cardSetMatch = row[1].match(/(\d+)\s*(?:\/|of)\s*(\d+)\s*(?:Kart|cards)/i)
-        const totalCardsInSet = cardSetMatch ? parseInt(cardSetMatch[2]) : 0
-        const drops = totalCardsInSet > 0 ? Math.ceil(totalCardsInSet / 2) : 0
 
         if (appIdMatch) {
           const appId = parseInt(appIdMatch[1])
           const name = clean(nameMatch ? nameMatch[1].replace(/<[^>]+>/g, '').trim() : `App ${appId}`)
-          found.set(appId, { name, hasCards: true, totalCards: totalCardsInSet })
-          cardEligibleCount++
-          totalPotentialDrops += drops
+          const totalCardsInSet = cardSetMatch ? parseInt(cardSetMatch[2]) : 0
+
+          found.set(appId, {
+            name,
+            hasCards: true,
+            totalCards: totalCardsInSet
+          })
           foundOnPage++
         }
       }
@@ -86,8 +82,25 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
     } catch { break }
   }
 
+  // Derive final stats from the UNIQUE map entries
+  let cardEligibleCount = 0
+  let totalPotentialDrops = 0
+  for (const entry of found.values()) {
+    if (entry.hasCards) {
+      cardEligibleCount++
+      if (entry.totalCards) {
+        totalPotentialDrops += Math.ceil(entry.totalCards / 2)
+      }
+    }
+  }
+
   return {
-    games: Array.from(found.entries()).map(([id, info]) => ({ appId: id, gameName: info.name, hasCards: info.hasCards, totalCards: info.totalCards })),
+    games: Array.from(found.entries()).map(([id, info]) => ({
+      appId: id,
+      gameName: info.name,
+      hasCards: info.hasCards,
+      totalCards: info.totalCards
+    })),
     cardEligibleCount,
     totalPotentialDrops
   }
@@ -139,7 +152,7 @@ export async function POST(req: Request) {
 
   const run = async () => {
     try {
-      send({ type: 'status', message: 'Kullanıcı doğrulanıyor...' })
+      send({ type: 'status', message: 'Keşif başlatılıyor...' })
 
       let stemId64 = ''
       let baseUrl = ''
@@ -157,10 +170,9 @@ export async function POST(req: Request) {
 
       if (!stemId64) throw new Error('Geçersiz Profil URL')
 
-      send({ type: 'status', message: 'Kütüphane ve Kartlı Oyunlar taranıyor...' })
       const discovery = await discoverGames(baseUrl, apiKey, stemId64)
 
-      // Strict Deduplication and Filtering
+      // The crucial filter: we only market-scan the card-eligible ones
       const filtered = discovery.games.filter(c => !excludedSet.has(c.appId) && c.hasCards)
 
       send({
@@ -178,14 +190,13 @@ export async function POST(req: Request) {
       for (const game of filtered) {
         if (processed >= limit) break
 
-        send({ type: 'status', message: `Analiz: ${game.gameName}` })
+        send({ type: 'status', message: `Pazar Analizi: ${game.gameName}` })
         const prices = await getCardPrices(game.appId)
 
         if (prices && (prices.normalCards.length > 0 || prices.foilCards.length > 0)) {
           const normalAvg = prices.normalCards.length > 0 ? (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) : 0
           const foilAvg = prices.foilCards.length > 0 ? (prices.foilCards.reduce((s, c) => s + c.price, 0) / prices.foilCards.length) : 0
 
-          // Use totalCards from discovery if available, else fallback
           const totalCardsInSet = game.totalCards || prices.normalCards.length || 8
           const droppableCount = Math.ceil(totalCardsInSet / 2)
 
