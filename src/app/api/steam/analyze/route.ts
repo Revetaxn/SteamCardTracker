@@ -290,40 +290,57 @@ async function checkGamesForCards(
   onProgress?: (current: number, total: number) => void
 ): Promise<number[]> {
   const cardGames: number[] = []
-  const batchSize = 10
+  const batchSize = 15
+  console.log(`[StoreScan] Starting scan for ${appIds.length} games...`)
 
   for (let i = 0; i < appIds.length; i += batchSize) {
     const batch = appIds.slice(i, i + batchSize)
 
-    // Process batch in parallel
     await Promise.all(batch.map(async (appId) => {
-      try {
-        const url = `https://store.steampowered.com/api/appdetails?appids=${appId}&filters=categories`
-        const response = await fetchWithRetry(url, { signal: AbortSignal.timeout(10000) }, 1, 500)
+      let attempts = 0
+      let success = false
+      while (attempts < 2 && !success) {
+        try {
+          const url = `https://store.steampowered.com/api/appdetails?appids=${appId}&filters=categories`
+          const response = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            signal: AbortSignal.timeout(10000)
+          })
 
-        if (response.ok) {
-          const data = await response.json()
-          if (data && data[appId] && data[appId].success && data[appId].data) {
-            const categories = data[appId].data.categories || []
-            const hasCards = categories.some((c: { id: number }) => c.id === 29)
-            if (hasCards) {
-              cardGames.push(appId)
+          if (response.ok) {
+            const data = await response.json()
+            if (data && data[appId]) {
+              if (data[appId].success && data[appId].data) {
+                const categories = data[appId].data.categories || []
+                const hasCards = categories.some((c: { id: number }) => c.id === 29)
+                if (hasCards) {
+                  console.log(`[StoreScan] AppID ${appId}: Cards FOUND`)
+                  cardGames.push(appId)
+                }
+                success = true
+              } else if (data[appId].success === false) {
+                console.warn(`[StoreScan] AppID ${appId}: Success=false (Rate limit?) - Attempt ${attempts + 1}/2`)
+                await new Promise(resolve => setTimeout(resolve, 1000))
+              }
             }
+          } else if (response.status === 429) {
+            console.warn(`[StoreScan] 429 Rate Limit hit. Waiting 2s...`)
+            await new Promise(resolve => setTimeout(resolve, 2000))
           }
+        } catch (err) {
+          console.error(`[StoreScan] AppID ${appId} Error:`, (err as Error).message)
         }
-      } catch (err) {
-        // Silent fail for single game
+        attempts++
       }
     }))
 
     if (onProgress) onProgress(Math.min(i + batchSize, appIds.length), appIds.length)
-
-    // Brief delay between batches to be safe
     if (i + batchSize < appIds.length) {
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise(resolve => setTimeout(resolve, 400))
     }
   }
 
+  console.log(`[StoreScan] Finished. Confirmed ${cardGames.length} new card games.`)
   return cardGames
 }
 
@@ -717,7 +734,7 @@ export async function POST(request: NextRequest) {
         }
 
         // --- Final Merge and Library Scanning ---
-        send({ type: 'status', message: 'Tüm kütüphane taranıyor (Kartlı oyunlar tespit ediliyor)...' })
+        console.log(`[Discovery] Final Merge starting. API games: ${apiOwnedGames.length}, Badge games: ${cardEligibleGames.length}`)
 
         // Combine games from all sources
         const libraryMap = new Map<number, string>()
@@ -729,13 +746,17 @@ export async function POST(request: NextRequest) {
         })
 
         const allLibraryAppIds = Array.from(libraryMap.keys())
+        console.log(`[Discovery] Total unique games in library base: ${allLibraryAppIds.length}`)
 
         // Start with appIDs already confirmed from Badges scan
         const badgeConfirmedIds = cardEligibleGames.map(g => g.appId)
+        console.log(`[Discovery] Games already confirmed via Badges HTML: ${badgeConfirmedIds.length}`)
+
         const confirmedCardAppIds = [...badgeConfirmedIds]
 
         // Only hit Store API for games NOT already found in badges
         const remainingToScan = allLibraryAppIds.filter(id => !badgeConfirmedIds.includes(id))
+        console.log(`[Discovery] Games to check via Store API scan: ${remainingToScan.length}`)
 
         if (remainingToScan.length > 0) {
           const additionalIds = await checkGamesForCards(remainingToScan, (current, total) => {
@@ -747,6 +768,7 @@ export async function POST(request: NextRequest) {
             }
           })
           confirmedCardAppIds.push(...additionalIds)
+          console.log(`[Discovery] Store API scan found ${additionalIds.length} more games with cards.`)
         }
 
         // Build the final allGames list
@@ -756,6 +778,7 @@ export async function POST(request: NextRequest) {
           hasCardDrops: true
         }))
 
+        console.log(`[Discovery] Final combined card-game count: ${allGames.length}`)
         scanMethod = apiOwnedGames.length > 0 ? 'api_plus_store_scan' : 'badges_plus_store'
         send({ type: 'status', message: `${allGames.length} kartlı oyun tespit edildi. Fiyatlar alınıyor...` })
 
