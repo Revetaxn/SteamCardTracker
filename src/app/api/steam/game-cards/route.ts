@@ -153,6 +153,13 @@ async function fetchCardPrices(appId: number, gameName: string): Promise<{ norma
 
     if (response.ok) {
       const data = await response.json()
+
+      // Detect soft rate limit: Steam sometimes returns 200 OK with success=false or null
+      if (!data || data.success === false) {
+        console.warn(`[SoftRateLimit] Detected for ${gameName} (${appId})`)
+        return { normalCards: [], foilCards: [] }
+      }
+
       const results = data.results || []
       const totalCount = data.total_count || 0
 
