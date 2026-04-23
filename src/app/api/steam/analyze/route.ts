@@ -141,7 +141,7 @@ export async function POST(req: Request) {
       // Strict Deduplication and Filtering
       const filtered = candidates.filter(c => !excludedSet.has(c.appId))
 
-      send({ type: 'progress', current: 0, total: Math.min(filtered.length, limit), found: candidates.length })
+      send({ type: 'progress', current: 0, total: filtered.length, found: candidates.length })
       send({ type: 'complete', data: { profile: { steamId: stemId64, personaName: 'Steam User', avatarUrl: '', profileUrl: baseUrl, gameCount: candidates.length } } })
 
       let processed = 0
