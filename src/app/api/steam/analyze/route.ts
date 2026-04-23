@@ -54,28 +54,33 @@ async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: strin
     })
   } catch { }
 
-  // Tier 4: Badge Scraper (Additional names/ids)
-  for (let p = 1; p <= 30; p++) {
-    try {
-      const html = await (await fetchWithTimeout(`${baseUrl}/badges/?p=${p}`.replace(/\/+/g, '/'))).text()
-      const matches = [...html.matchAll(/gamecards\/(\d+)/g)]
-      if (matches.length === 0) break
-      matches.forEach(m => {
-        const id = parseInt(m[1])
-        if (!found.has(id)) found.set(id, { name: `App ${id}` })
-      })
-    } catch { break }
-  }
-
   return Array.from(found.entries()).map(([id, info]) => ({ appId: id, gameName: info.name }))
 }
 
-// ===== MARKET ENGINE =====
-async function getCardPrices(appId: number) {
+// ===== MARKET ENGINE (WITH RETRY & RATE LIMIT DETECTION) =====
+async function getCardPrices(appId: number, retryCount = 0): Promise<any> {
   try {
-    const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=10&currency=1&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
-    const data = await (await fetchWithTimeout(url, { headers: { 'Referer': 'https://steamcommunity.com/market/' } })).json()
-    if (!data?.success || !data.results || data.results.length === 0) return null
+    const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=15&currency=1&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
+    const resp = await fetchWithTimeout(url, { headers: { 'Referer': 'https://steamcommunity.com/market/' } })
+
+    if (resp.status === 429 || resp.status === 403) {
+      if (retryCount < 2) {
+        await delay(5000 * (retryCount + 1))
+        return getCardPrices(appId, retryCount + 1)
+      }
+      return { _error: 'Rate Limit' }
+    }
+
+    const data = await resp.json()
+    if (!data?.success) {
+      if (retryCount < 2) {
+        await delay(3000)
+        return getCardPrices(appId, retryCount + 1)
+      }
+      return null
+    }
+
+    if (!data.results || data.results.length === 0) return null
 
     const normalCards: any[] = []
     const foilCards: any[] = []
@@ -96,7 +101,13 @@ async function getCardPrices(appId: number) {
     })
 
     return { normalCards, foilCards }
-  } catch { return null }
+  } catch {
+    if (retryCount < 1) {
+      await delay(2000)
+      return getCardPrices(appId, retryCount + 1)
+    }
+    return null
+  }
 }
 
 // ===== MAIN ROUTE =====
@@ -136,15 +147,19 @@ export async function POST(req: Request) {
       const filtered = library.filter(g => !excludedSet.has(g.appId))
 
       send({
+        type: 'discovery',
+        count: library.length,
+        profile: { steamId: stemId64, personaName: 'Steam User', profileUrl: baseUrl }
+      })
+
+      send({
         type: 'progress',
         current: 0,
         total: filtered.length,
         found: library.length,
-        cardGames: 0, // Will be updated as we find them
+        cardGames: 0,
         totalPotentialDrops: 0
       })
-
-      send({ type: 'complete', data: { profile: { steamId: stemId64, personaName: 'Steam User', avatarUrl: '', profileUrl: baseUrl, gameCount: library.length } } })
 
       let processed = 0
       let cardEligibleCount = 0
@@ -153,16 +168,16 @@ export async function POST(req: Request) {
       for (const game of filtered) {
         if (processed >= limit) break
 
-        send({ type: 'status', message: `Pazar Kontrolü (${processed}/${limit}): ${game.gameName}` })
+        send({ type: 'status', message: `Analiz: ${game.gameName}` })
         const prices = await getCardPrices(game.appId)
 
-        if (prices && (prices.normalCards.length > 0 || prices.foilCards.length > 0)) {
+        if (prices && !prices._error && (prices.normalCards.length > 0 || prices.foilCards.length > 0)) {
           cardEligibleCount++
 
           const normalAvg = prices.normalCards.length > 0 ? (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) : 0
           const foilAvg = prices.foilCards.length > 0 ? (prices.foilCards.reduce((s, c) => s + c.price, 0) / prices.foilCards.length) : 0
 
-          const totalCardsInSet = Math.max(prices.normalCards.length, 8) // Fallback to 8
+          const totalCardsInSet = Math.max(prices.normalCards.length, 8)
           const droppableCount = Math.ceil(totalCardsInSet / 2)
           totalPotentialDrops += droppableCount
 
@@ -193,9 +208,10 @@ export async function POST(req: Request) {
           totalPotentialDrops: totalPotentialDrops
         })
 
-        // Safety delay
-        await delay(1300)
+        await delay(1350)
       }
+
+      send({ type: 'complete' })
 
     } catch (e: any) {
       send({ type: 'error', message: e.message })

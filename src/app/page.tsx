@@ -57,11 +57,12 @@ const translations = {
     scanning: 'Taranıyor...',
     progress: 'Tarama İlerlemesi',
     potentialProfit: 'Top. Kazanç',
-    topFoil: 'Top Foil',
+    topFoil: 'En Değerli Foil',
     getKey: 'Anahtar Al',
     noGames: 'Henüz tarama yapılmadı.',
     sortByProfit: 'Kazanca Göre',
     sortByCard: 'Kart Fiyatına Göre',
+    sortByFoil: 'Foil Fiyatına Göre',
     viewGrid: 'Grid',
     viewList: 'Liste',
     totalDrops: 'Toplam Droplar',
@@ -82,6 +83,7 @@ const translations = {
     noGames: 'No games scanned yet.',
     sortByProfit: 'Sort by Profit',
     sortByCard: 'Sort by Card Price',
+    sortByFoil: 'Sort by Foil Price',
     viewGrid: 'Grid',
     viewList: 'List',
     totalDrops: 'Total Drops',
@@ -104,7 +106,7 @@ export default function SteamCardTracker() {
   const [isClient, setIsClient] = useState(false)
 
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
-  const [sortBy, setSortBy] = useState<'profit' | 'card'>('profit')
+  const [sortBy, setSortBy] = useState<'profit' | 'card' | 'foil'>('profit')
   const [currentPage, setCurrentPage] = useState(1)
   const [autoScan, setAutoScan] = useState(false)
   const itemsPerPage = 50
@@ -112,6 +114,9 @@ export default function SteamCardTracker() {
   useEffect(() => { setIsClient(true) }, [])
 
   const abortControllerRef = useRef<AbortController | null>(null)
+
+  // Track the state at the start of a batch to avoid double-counting
+  const sessionBaseRef = useRef({ current: 0, cardGames: 0, potentialDrops: 0 })
 
   const analyzeProfile = useCallback(async (isMore = false) => {
     if (!url.trim()) return
@@ -129,6 +134,14 @@ export default function SteamCardTracker() {
       setProgress(null)
       setExpandedGames(new Set())
       setCurrentPage(1)
+      sessionBaseRef.current = { current: 0, cardGames: 0, potentialDrops: 0 }
+    } else {
+      // Use latest confirmed stats as base
+      sessionBaseRef.current = {
+        current: progress?.current || 0,
+        cardGames: progress?.cardGames || 0,
+        potentialDrops: progress?.totalPotentialDrops || 0
+      }
     }
 
     try {
@@ -160,23 +173,35 @@ export default function SteamCardTracker() {
           try {
             const data = JSON.parse(line.slice(6))
             if (data.type === 'status') setStatusMessage(data.message)
-            if (data.type === 'progress') setProgress(p => ({
-              current: (isMore ? (p?.current || 0) : 0) + (data.current || 0),
-              total: data.total || 0,
-              foundInLib: data.found || 0,
-              cardGames: (isMore ? (p?.cardGames || 0) : 0) + (data.cardGames || 0),
-              totalPotentialDrops: (isMore ? (p?.totalPotentialDrops || 0) : 0) + (data.totalPotentialDrops || 0)
-            }))
+            if (data.type === 'discovery') {
+              setProfile(p => p || data.profile)
+              setProgress(p => ({
+                current: p?.current || 0,
+                total: data.count,
+                foundInLib: data.count,
+                cardGames: p?.cardGames || 0,
+                totalPotentialDrops: p?.totalPotentialDrops || 0
+              }))
+            }
+            if (data.type === 'progress') {
+              setProgress(prev => {
+                // FIXED: Use the session base to prevent double counting
+                return {
+                  current: sessionBaseRef.current.current + data.current,
+                  total: prev?.total || data.total,
+                  foundInLib: prev?.foundInLib || data.found,
+                  cardGames: sessionBaseRef.current.cardGames + data.cardGames,
+                  totalPotentialDrops: sessionBaseRef.current.potentialDrops + data.totalPotentialDrops
+                }
+              })
+            }
             if (data.type === 'game') {
               setGames(prev => {
                 if (prev.some(g => g.appId === data.data.appId)) return prev
                 return [...prev, data.data]
               })
             }
-            if (data.type === 'complete') {
-              if (data.data.profile) setProfile(data.data.profile)
-              setLoading(false)
-            }
+            if (data.type === 'complete') setLoading(false)
             if (data.type === 'error') throw new Error(data.message)
           } catch (e) { console.error(e) }
         }
@@ -186,12 +211,12 @@ export default function SteamCardTracker() {
     } finally {
       setLoading(false)
     }
-  }, [url, apiKey, lang, t, games])
+  }, [url, apiKey, lang, t, games, progress])
 
   // Auto-Scan Effect
   useEffect(() => {
     if (autoScan && !loading && progress && progress.current < progress.total) {
-      const timer = setTimeout(() => analyzeProfile(true), 1500)
+      const timer = setTimeout(() => analyzeProfile(true), 2000)
       return () => clearTimeout(timer)
     }
   }, [autoScan, loading, progress, analyzeProfile])
@@ -208,6 +233,7 @@ export default function SteamCardTracker() {
   const sortedGames = useMemo(() => {
     return [...games].sort((a, b) => {
       if (sortBy === 'profit') return b.droppableCardsValue - a.droppableCardsValue
+      if (sortBy === 'foil') return b.foilCardsValue - a.foilCardsValue
       return b.highestCardPrice - a.highestCardPrice
     })
   }, [games, sortBy])
@@ -219,7 +245,10 @@ export default function SteamCardTracker() {
 
   const totalPages = Math.ceil(sortedGames.length / itemsPerPage)
   const totalPot = useMemo(() => games.reduce((acc, g) => acc + g.droppableCardsValue, 0), [games])
-  const totalFoilValue = useMemo(() => games.reduce((acc, g) => acc + g.foilCardsValue, 0), [games])
+  const topFoil = useMemo(() => {
+    if (games.length === 0) return 0
+    return Math.max(...games.map(g => g.foilCardsValue))
+  }, [games])
 
   if (!isClient) return null
 
@@ -282,13 +311,13 @@ export default function SteamCardTracker() {
                   {!loading && progress.current < progress.total && (
                     <div className="flex flex-col gap-2">
                       <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[9px] uppercase tracking-widest rounded-lg transition-transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20">
-                        DEVAM ET (BATI-100)
+                        DEVAM ET ({progress.total - progress.current} OYUN KALDI)
                       </Button>
                       <button
                         onClick={() => setAutoScan(!autoScan)}
                         className={`text-[9px] font-black uppercase tracking-widest transition-colors flex items-center justify-center gap-2 py-1 ${autoScan ? 'text-green-400' : 'text-[#4d535b]'}`}
                       >
-                        <Zap className={`w-3 h-3 ${autoScan ? 'fill-green-400' : ''}`} />
+                        <Zap className={`w-3 h-3 ${autoScan ? 'fill-green-400 font-black' : ''}`} />
                         {autoScan ? 'OTOMATİK TARAMA AKTİF' : 'OTOMATİK TARA'}
                       </button>
                     </div>
@@ -318,19 +347,19 @@ export default function SteamCardTracker() {
                   </TooltipTrigger>
                   <TooltipContent className="bg-[#171d25] border-white/10 text-white p-3 max-w-xs">
                     <p className="text-[10px] font-black uppercase mb-1">Kartlı Oyun Tespit Sistemi</p>
-                    <p className="text-[9px] text-[#8f98a0] leading-none">Kütüphanendeki {progress.foundInLib} oyundan şimdilik {progress.cardGames} tanesinin kartı doğrulandı.</p>
+                    <p className="text-[9px] text-[#8f98a0] leading-none">Kütüphanendeki {progress.foundInLib} oyundan şimdiye kadar {progress.cardGames} tanesinin kartı doğrulandı.</p>
                   </TooltipContent>
                 </Tooltip>
               </Card>
 
               <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
                 <CardContent className="p-6">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.totalDrops}</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.topFoil}</span>
                   <div className="flex items-end gap-3 mt-2">
-                    <div className="text-4xl font-black text-white italic tracking-tighter">{progress.totalPotentialDrops}</div>
-                    <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Cards</div>
+                    <div className="text-4xl font-black text-yellow-500 italic tracking-tighter">${topFoil.toFixed(2)}</div>
+                    <div className="text-[10px] font-bold text-yellow-500 mb-2 uppercase italic">USD</div>
                   </div>
-                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Total Estimated Drops</p>
+                  <p className="text-[8px] font-bold text-[#4d535b] mt-2 uppercase tracking-tighter italic">Single Highest Foil Found</p>
                 </CardContent>
               </Card>
 
@@ -350,17 +379,20 @@ export default function SteamCardTracker() {
           {/* CONTROLS */}
           {games.length > 0 && (
             <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-8 p-4 bg-[#171d25]/30 rounded-2xl border border-white/5 backdrop-blur-md">
-              <div className="flex bg-[#0d121a] p-1 rounded-xl border border-white/5">
-                <Button onClick={() => setSortBy('profit')} variant="ghost" className={`h-9 px-4 text-xs font-black uppercase ${sortBy === 'profit' ? 'bg-[#66c0f4] text-[#1b2838]' : 'text-[#8f98a0] hover:text-white'}`}>
+              <div className="flex bg-[#0d121a] p-1 rounded-xl border border-white/5 flex-wrap">
+                <Button onClick={() => setSortBy('profit')} variant="ghost" className={`h-9 px-4 text-[10px] font-black uppercase ${sortBy === 'profit' ? 'bg-[#66c0f4] text-[#1b2838]' : 'text-[#8f98a0] hover:text-white'}`}>
                   <Coins className="w-3.5 h-3.5 mr-2" /> {t.sortByProfit}
                 </Button>
-                <Button onClick={() => setSortBy('card')} variant="ghost" className={`h-9 px-4 text-xs font-black uppercase ${sortBy === 'card' ? 'bg-[#66c0f4] text-[#1b2838]' : 'text-[#8f98a0] hover:text-white'}`}>
+                <Button onClick={() => setSortBy('card')} variant="ghost" className={`h-9 px-4 text-[10px] font-black uppercase ${sortBy === 'card' ? 'bg-[#66c0f4] text-[#1b2838]' : 'text-[#8f98a0] hover:text-white'}`}>
                   <BarChart3 className="w-3.5 h-3.5 mr-2" /> {t.sortByCard}
+                </Button>
+                <Button onClick={() => setSortBy('foil')} variant="ghost" className={`h-9 px-4 text-[10px] font-black uppercase ${sortBy === 'foil' ? 'bg-[#66c0f4] text-[#1b2838]' : 'text-[#8f98a0] hover:text-white'}`}>
+                  <Star className="w-3.5 h-3.5 mr-2" /> {t.sortByFoil}
                 </Button>
               </div>
 
               <div className="flex items-center gap-4">
-                <div className="flex bg-[#0d121a] p-1 rounded-xl border border-white/5">
+                <div className="flex bg-[#171d25] p-1 rounded-xl border border-white/5">
                   <Button onClick={() => setViewMode('list')} variant="ghost" size="icon" className={`h-9 w-9 ${viewMode === 'list' ? 'bg-white/10 text-[#66c0f4]' : 'text-[#4d535b]'}`}><List className="w-4 h-4" /></Button>
                   <Button onClick={() => setViewMode('grid')} variant="ghost" size="icon" className={`h-9 w-9 ${viewMode === 'grid' ? 'bg-white/10 text-[#66c0f4]' : 'text-[#4d535b]'}`}><LayoutGrid className="w-4 h-4" /></Button>
                 </div>
