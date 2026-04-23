@@ -18,130 +18,71 @@ const delay = (ms: number) => new Promise(res => setTimeout(res, ms))
 
 // ===== DISCOVERY ENGINE =====
 async function discoverGames(baseUrl: string, apiKey?: string, steamId64?: string) {
-  const found = new Map<number, { name: string, hasCards: boolean, totalCards?: number }>()
+  const found = new Map<number, { name: string }>()
   const clean = (s: string) => s.replace(/Steam Card Beta/i, '').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').trim()
 
-  // Tier 1: Web API (Fast & Professional)
+  // Tier 1: Web API
   if (apiKey && steamId64 && apiKey !== 'undefined') {
     try {
       const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamId64}&include_appinfo=1&format=json`
       const data = await (await fetchWithTimeout(url)).json()
       data.response?.games?.forEach((g: any) => {
-        if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name || `App ${g.appid}`), hasCards: false })
+        if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name || `App ${g.appid}`) })
       })
     } catch { }
   }
 
-  // Tier 2: HTML Library Page (Fallback)
+  // Tier 2: HTML Library Page
   try {
     const html = await (await fetchWithTimeout(`${baseUrl}/games/?tab=all`.replace(/\/+/g, '/'))).text()
     const rgMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
     if (rgMatch) {
       const gList = JSON.parse(rgMatch[1])
       gList.forEach((g: any) => {
-        if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name), hasCards: false })
+        if (!found.has(g.appid)) found.set(g.appid, { name: clean(g.name) })
       })
     }
   } catch { }
 
-  // Tier 3: XML Library Page (Fallback)
+  // Tier 3: XML Library Page
   try {
     const xml = await (await fetchWithTimeout(`${baseUrl}/games/?xml=1`.replace(/\/+/g, '/'))).text()
     const appIds = [...xml.matchAll(/<appID>(\d+)<\/appID>/g)].map(m => parseInt(m[1]))
     const names = [...xml.matchAll(/<name><!\[CDATA\[(.*?)\]\]><\/name>/g)].map(m => m[1])
     appIds.forEach((id, i) => {
-      if (!found.has(id)) found.set(id, { name: clean(names[i] || `App ${id}`), hasCards: false })
+      if (!found.has(id)) found.set(id, { name: clean(names[i] || `App ${id}`) })
     })
   } catch { }
 
-  // Tier 4: Badge/Card Scraper (High Accuracy for Started Sets)
+  // Tier 4: Badge Scraper (Additional names/ids)
   for (let p = 1; p <= 30; p++) {
     try {
       const html = await (await fetchWithTimeout(`${baseUrl}/badges/?p=${p}`.replace(/\/+/g, '/'))).text()
-      const rows = html.matchAll(/badge_row([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/sg)
-      let foundOnPage = 0
-      for (const row of rows) {
-        const appIdMatch = row[1].match(/gamecards\/(\d+)/)
-        const nameMatch = row[1].match(/badge_title">([\s\S]*?)(?:&nbsp;|<\/div>)/)
-        const cardSetMatch = row[1].match(/(\d+)\s*(?:\/|of)\s*(\d+)\s*(?:Kart|cards)/i)
-
-        if (appIdMatch) {
-          const appId = parseInt(appIdMatch[1])
-          const name = clean(nameMatch ? nameMatch[1].replace(/<[^>]+>/g, '').trim() : `App ${appId}`)
-          const totalCardsInSet = cardSetMatch ? parseInt(cardSetMatch[2]) : 0
-
-          found.set(appId, { name, hasCards: true, totalCards: totalCardsInSet })
-          foundOnPage++
-        }
-      }
-      if (foundOnPage === 0) break
+      const matches = [...html.matchAll(/gamecards\/(\d+)/g)]
+      if (matches.length === 0) break
+      matches.forEach(m => {
+        const id = parseInt(m[1])
+        if (!found.has(id)) found.set(id, { name: `App ${id}` })
+      })
     } catch { break }
   }
 
-  // Tier 5: UNIVERSAL BULK CATEGORY CHECK (The "Full Coverage" Layer)
-  // Check every game found in library in batches of 50
-  const allAppIds = Array.from(found.keys())
-  for (let i = 0; i < allAppIds.length; i += 50) {
-    const chunk = allAppIds.slice(i, i + 50)
-    try {
-      const resp = await fetchWithTimeout(`https://store.steampowered.com/api/appdetails?appids=${chunk.join(',')}&filters=categories`)
-      const data = await resp.json()
-
-      chunk.forEach(appId => {
-        const app = data[appId.toString()]
-        if (app?.success && app.data?.categories) {
-          // Category ID 8 is "Trading Cards"
-          const hasCards = app.data.categories.some((c: any) => c.id === 8)
-          if (hasCards) {
-            const existing = found.get(appId)!
-            found.set(appId, { ...existing, hasCards: true })
-          }
-        }
-      })
-      // Small cooldown between batches to be safe
-      await delay(500)
-    } catch { }
-  }
-
-  // Derive final stats from the UNIQUE map entries
-  let cardEligibleCount = 0
-  let totalPotentialDrops = 0
-  for (const entry of found.values()) {
-    if (entry.hasCards) {
-      cardEligibleCount++
-      // If we don't know the exact set size from Tier 4, we assume a safe average of 8 (4 drops)
-      const drops = entry.totalCards ? Math.ceil(entry.totalCards / 2) : 4
-      totalPotentialDrops += drops
-    }
-  }
-
-  return {
-    games: Array.from(found.entries()).map(([id, info]) => ({
-      appId: id,
-      gameName: info.name,
-      hasCards: info.hasCards,
-      totalCards: info.totalCards
-    })),
-    cardEligibleCount,
-    totalPotentialDrops
-  }
+  return Array.from(found.entries()).map(([id, info]) => ({ appId: id, gameName: info.name }))
 }
 
 // ===== MARKET ENGINE =====
 async function getCardPrices(appId: number) {
   try {
-    const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&currency=1&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
+    const url = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=10&currency=1&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
     const data = await (await fetchWithTimeout(url, { headers: { 'Referer': 'https://steamcommunity.com/market/' } })).json()
-    if (!data?.success || !data.results) return null
+    if (!data?.success || !data.results || data.results.length === 0) return null
 
     const normalCards: any[] = []
     const foilCards: any[] = []
 
     data.results.forEach((item: any) => {
       const tags = (item.asset_description?.tags || []).map((t: any) => t.internal_name)
-      const isFoil = tags.includes('cardborder_1') ||
-        (item.hash_name || '').toLowerCase().includes('foil') ||
-        (item.name || '').toLowerCase().includes('(foil)')
+      const isFoil = tags.includes('cardborder_1') || (item.hash_name || '').toLowerCase().includes('foil')
 
       const card = {
         name: item.name,
@@ -173,7 +114,7 @@ export async function POST(req: Request) {
 
   const run = async () => {
     try {
-      send({ type: 'status', message: 'Kütüphane Keşfi & Doğrulama başlatılıyor...' })
+      send({ type: 'status', message: 'Tüm kütüphane sıralanıyor...' })
 
       let stemId64 = ''
       let baseUrl = ''
@@ -191,35 +132,39 @@ export async function POST(req: Request) {
 
       if (!stemId64) throw new Error('Geçersiz Profil URL')
 
-      const discovery = await discoverGames(baseUrl, apiKey, stemId64)
-
-      // We process only verified card-eligible games
-      const filtered = discovery.games.filter(c => !excludedSet.has(c.appId) && c.hasCards)
+      const library = await discoverGames(baseUrl, apiKey, stemId64)
+      const filtered = library.filter(g => !excludedSet.has(g.appId))
 
       send({
         type: 'progress',
         current: 0,
         total: filtered.length,
-        found: discovery.games.length,
-        cardGames: discovery.cardEligibleCount,
-        totalPotentialDrops: discovery.totalPotentialDrops
+        found: library.length,
+        cardGames: 0, // Will be updated as we find them
+        totalPotentialDrops: 0
       })
 
-      send({ type: 'complete', data: { profile: { steamId: stemId64, personaName: 'Steam User', avatarUrl: '', profileUrl: baseUrl, gameCount: discovery.games.length } } })
+      send({ type: 'complete', data: { profile: { steamId: stemId64, personaName: 'Steam User', avatarUrl: '', profileUrl: baseUrl, gameCount: library.length } } })
 
       let processed = 0
+      let cardEligibleCount = 0
+      let totalPotentialDrops = 0
+
       for (const game of filtered) {
         if (processed >= limit) break
 
-        send({ type: 'status', message: `Analiz: ${game.gameName}` })
+        send({ type: 'status', message: `Pazar Kontrolü (${processed}/${limit}): ${game.gameName}` })
         const prices = await getCardPrices(game.appId)
 
         if (prices && (prices.normalCards.length > 0 || prices.foilCards.length > 0)) {
+          cardEligibleCount++
+
           const normalAvg = prices.normalCards.length > 0 ? (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) : 0
           const foilAvg = prices.foilCards.length > 0 ? (prices.foilCards.reduce((s, c) => s + c.price, 0) / prices.foilCards.length) : 0
 
-          const totalCardsInSet = game.totalCards || prices.normalCards.length || 8
+          const totalCardsInSet = Math.max(prices.normalCards.length, 8) // Fallback to 8
           const droppableCount = Math.ceil(totalCardsInSet / 2)
+          totalPotentialDrops += droppableCount
 
           send({
             type: 'game',
@@ -243,10 +188,12 @@ export async function POST(req: Request) {
           type: 'progress',
           current: processed,
           total: filtered.length,
-          found: discovery.games.length,
-          cardGames: discovery.cardEligibleCount,
-          totalPotentialDrops: discovery.totalPotentialDrops
+          found: library.length,
+          cardGames: cardEligibleCount,
+          totalPotentialDrops: totalPotentialDrops
         })
+
+        // Safety delay
         await delay(1300)
       }
 
