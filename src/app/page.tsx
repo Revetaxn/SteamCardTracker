@@ -184,6 +184,15 @@ export default function SteamCardTracker() {
     }
   }, [url, apiKey, lang, t, games])
 
+  const toggleGame = useCallback((id: number) => {
+    setExpandedGames(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
   const sortedGames = useMemo(() => {
     return [...games].sort((a, b) => {
       if (sortBy === 'profit') return (b.droppableCardsValue + b.foilCardsValue) - (a.droppableCardsValue + a.foilCardsValue)
@@ -237,9 +246,6 @@ export default function SteamCardTracker() {
                   ) : (
                     <Button onClick={() => analyzeProfile(false)} className="h-12 bg-[#66c0f4] hover:bg-[#4fa3d3] text-[#1b2838] font-black px-8 rounded-xl shadow-lg shadow-[#66c0f4]/10 uppercase transition-all active:scale-95">{t.analyze}</Button>
                   )}
-                  {!loading && progress && progress.current < progress.total && (
-                    <Button onClick={() => analyzeProfile(true)} className="h-12 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black px-8 rounded-xl shadow-lg shadow-green-500/10 uppercase animate-pulse">{t.continue}</Button>
-                  )}
                 </div>
               </div>
               <div className="flex justify-end">
@@ -253,23 +259,35 @@ export default function SteamCardTracker() {
           {/* DASHBOARD */}
           {progress && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12 animate-in fade-in slide-in-from-top-4 duration-700">
-              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
-                <CardContent className="p-6">
+              <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl group relative overflow-hidden">
+                <CardContent className="p-6 relative z-10">
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">{t.progress}</span>
                     <span className="text-xs font-mono text-[#66c0f4] tracking-tight">{progress.current} / {progress.total}</span>
                   </div>
-                  <Progress value={(progress.current / (progress.total || 1)) * 100} className="h-1.5 bg-white/5 [&>div]:bg-[#66c0f4]" />
-                  <p className="text-[9px] mt-3 font-bold opacity-40 uppercase truncate italic">{statusMessage}</p>
+                  <Progress value={(progress.current / (progress.total || 1)) * 100} className="h-2 bg-white/5 [&>div]:bg-[#66c0f4] mb-4" />
+
+                  {!loading && progress.current < progress.total && (
+                    <Button onClick={() => analyzeProfile(true)} className="w-full h-10 bg-green-500 hover:bg-green-600 text-[#1b2838] font-black text-[10px] uppercase tracking-wider rounded-lg shadow-xl shadow-green-500/10">
+                      {progress.total - progress.current} OYUN KALDI - DEVAM ET
+                    </Button>
+                  )}
+
+                  {loading && (
+                    <div className="flex items-center gap-2 text-[9px] font-black uppercase text-[#66c0f4] animate-pulse italic">
+                      <div className="w-1.5 h-1.5 bg-[#66c0f4] rounded-full"></div>
+                      {statusMessage}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
               <Card className="bg-[#171d25]/60 border-white/5 backdrop-blur-xl">
                 <CardContent className="p-6">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">Total Discovery</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#8f98a0]">Total Library Access</span>
                   <div className="flex items-end gap-3 mt-2">
-                    <div className="text-3xl font-black text-white italic">{progress.foundInLib}</div>
-                    <div className="text-[10px] font-bold text-[#8f98a0] mb-1.5 uppercase">Owned Games</div>
+                    <div className="text-4xl font-black text-white italic tracking-tighter">{progress.foundInLib}</div>
+                    <div className="text-[10px] font-bold text-[#8f98a0] mb-2 uppercase italic">Games Found</div>
                   </div>
                 </CardContent>
               </Card>
@@ -278,17 +296,17 @@ export default function SteamCardTracker() {
                 <CardContent className="p-6">
                   <span className="text-[10px] font-black uppercase tracking-widest text-[#66c0f4]/70">{t.potentialProfit}</span>
                   <div className="flex items-end gap-2 mt-2">
-                    <div className="text-3xl font-black text-green-400 italic">${totalPot.toFixed(2)}</div>
-                    <div className="text-[10px] font-bold text-green-400 mb-1.5 uppercase tracking-widest group-hover:scale-110 transition-transform">USD</div>
+                    <div className="text-4xl font-black text-green-400 italic tracking-tighter">${totalPot.toFixed(2)}</div>
+                    <div className="text-[10px] font-bold text-green-400 mb-2 uppercase tracking-widest group-hover:scale-110 transition-transform">USD</div>
                   </div>
                 </CardContent>
               </Card>
             </div>
           )}
 
-          {/* CONTROLS: View Mode, Sorting, Pagination */}
+          {/* CONTROLS */}
           {games.length > 0 && (
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-8 p-4 bg-[#171d25]/30 rounded-2xl border border-white/5 backdrop-blur-md animate-in fade-in duration-500">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-8 p-4 bg-[#171d25]/30 rounded-2xl border border-white/5 backdrop-blur-md">
               <div className="flex bg-[#0d121a] p-1 rounded-xl border border-white/5">
                 <Button onClick={() => setSortBy('profit')} variant="ghost" className={`h-9 px-4 text-xs font-black uppercase ${sortBy === 'profit' ? 'bg-[#66c0f4] text-[#1b2838]' : 'text-[#8f98a0] hover:text-white'}`}>
                   <Coins className="w-3.5 h-3.5 mr-2" /> {t.sortByProfit}
@@ -317,94 +335,79 @@ export default function SteamCardTracker() {
 
           {/* MAIN LIST / GRID */}
           <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-3'}>
-            {paginatedGames.length === 0 && !loading && !error && (
-              <div className="col-span-full py-40 flex flex-col items-center opacity-20 select-none">
-                <Gamepad2 className="w-16 h-16 mb-4" />
-                <p className="font-black uppercase tracking-[0.3em] text-xs">{t.noGames}</p>
-              </div>
-            )}
-
-            {error && (
-              <div className="col-span-full text-center p-6 border border-red-500/20 bg-red-500/5 rounded-2xl">
-                <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
-                <p className="text-sm font-bold text-red-400 uppercase italic">{error}</p>
-              </div>
-            )}
-
-            {paginatedGames.map((game, idx) => (
-              <Card key={game.appId} className={`bg-[#171d25]/40 border-white/5 hover:border-[#66c0f4]/20 transition-all duration-300 overflow-hidden group ${viewMode === 'grid' ? 'flex flex-col' : ''}`}>
-                <CardContent className={`p-3 flex ${viewMode === 'grid' ? 'flex-col gap-4' : 'items-center gap-6'}`}>
-                  <div className={`relative flex-shrink-0 ${viewMode === 'grid' ? 'w-full aspect-[231/87] rounded-xl overflow-hidden' : 'w-24 h-10 rounded-md overflow-hidden'}`}>
-                    <img src={game.gameIconUrl} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700 group-hover:scale-105" />
-                    {viewMode === 'grid' && (
-                      <div className="absolute top-2 right-2 flex gap-1">
-                        <Badge className="bg-black/60 text-[#66c0f4] backdrop-blur-md border-none text-[8px] font-black h-5">{game.totalNormalCards} C</Badge>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className={`font-black text-white truncate uppercase italic tracking-tight ${viewMode === 'grid' ? 'text-sm' : 'text-sm'}`}>{game.gameName}</h3>
-                      {viewMode === 'grid' && (
-                        <a href={`https://steamcommunity.com/market/search?q=${encodeURIComponent(game.gameName)}&appid=753`} target="_blank" className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10"><ExternalLink className="w-3.5 h-3.5 text-[#4d535b] group-hover:text-[#66c0f4]" /></a>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-4 mt-2">
-                      <div className="flex flex-col">
-                        <span className="text-[8px] font-black text-[#8f98a0] uppercase tracking-tighter italic">Normal Drops</span>
-                        <span className="text-xs font-black text-green-400 group-hover:scale-110 origin-left transition-transform">${game.droppableCardsValue.toFixed(2)}</span>
-                      </div>
-                      <div className="w-px h-4 bg-white/5"></div>
-                      <div className={`flex flex-col ${game.foilCards.length === 0 ? 'opacity-20' : ''}`}>
-                        <span className="text-[8px] font-black text-yellow-500/70 uppercase tracking-tighter italic">{t.topFoil}</span>
-                        <span className="text-xs font-black text-yellow-500">${game.foilCardsValue.toFixed(2)}</span>
-                      </div>
-                      <div className="w-px h-4 bg-white/5 md:hidden lg:block"></div>
-                      <div className="hidden md:flex flex-col">
-                        <span className="text-[8px] font-black text-[#66c0f4]/70 uppercase tracking-tighter italic">Max Card</span>
-                        <span className="text-xs font-black text-[#66c0f4]">${game.highestCardPrice.toFixed(2)}</span>
+            {paginatedGames.map((game) => {
+              const dropCount = Math.ceil(game.totalNormalCards / 2)
+              return (
+                <Card key={game.appId} className={`bg-[#171d25]/40 border-white/5 hover:border-[#66c0f4]/20 transition-all duration-300 overflow-hidden group ${viewMode === 'grid' ? 'flex flex-col' : ''}`}>
+                  <CardContent className={`p-4 flex ${viewMode === 'grid' ? 'flex-col gap-4' : 'items-center gap-6'}`}>
+                    <div className={`relative flex-shrink-0 ${viewMode === 'grid' ? 'w-full aspect-[231/87] rounded-xl overflow-hidden' : 'w-24 h-11 rounded-lg overflow-hidden shadow-2xl'}`}>
+                      <img src={game.gameIconUrl} className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700" alt="" />
+                      <div className="absolute top-1.5 left-1.5 flex gap-1">
+                        <Badge className="bg-black/80 text-[#66c0f4] border-none text-[8px] font-black h-4 px-1.5">{dropCount} DROPS</Badge>
                       </div>
                     </div>
-                  </div>
 
-                  <div className={`flex items-center gap-2 ${viewMode === 'grid' ? 'mt-4 pt-3 border-t border-white/5 w-full justify-between' : ''}`}>
-                    {viewMode === 'list' && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <a href={`https://steamcommunity.com/market/search?q=${encodeURIComponent(game.gameName)}&appid=753`} target="_blank" className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-all">
-                            <ExternalLink className="w-4 h-4 text-[#4d535b] group-hover:text-[#66c0f4]" />
-                          </a>
-                        </TooltipTrigger>
-                        <TooltipContent className="bg-[#171d25] border-white/10 text-white text-[10px] font-black uppercase">Market</TooltipContent>
-                      </Tooltip>
-                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="font-black text-white truncate uppercase italic tracking-tight text-sm">{game.gameName}</h3>
+                        {viewMode === 'grid' && (
+                          <a href={`https://steamcommunity.com/market/search?q=${encodeURIComponent(game.gameName)}&appid=753`} target="_blank" className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10"><ExternalLink className="w-3.5 h-3.5 text-[#4d535b] group-hover:text-[#66c0f4]" /></a>
+                        )}
+                      </div>
 
-                    <Button variant="ghost" size={viewMode === 'grid' ? 'sm' : 'icon'} onClick={() => toggleGame(game.appId)} className={`rounded-xl h-10 ${viewMode === 'grid' ? 'flex-1 gap-2 text-[10px] font-black uppercase' : 'w-10'}`}>
-                      {viewMode === 'grid' && (expandedGames.has(game.appId) ? 'Gizle' : 'Kartları Gör')}
-                      <ChevronDown className={`w-4 h-4 text-[#4d535b] transition-transform ${expandedGames.has(game.appId) ? 'rotate-180' : ''}`} />
-                    </Button>
-                  </div>
-                </CardContent>
-
-                {expandedGames.has(game.appId) && (
-                  <div className="px-6 pb-6 pt-4 border-t border-white/5 bg-black/40 animate-in slide-in-from-top-2 duration-300">
-                    <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-3">
-                      {[...game.normalCards, ...game.foilCards].sort((a, b) => b.price - a.price).map((card, i) => (
-                        <div key={i} className="space-y-2 text-center group/card">
-                          <div className="relative aspect-[62/62] overflow-hidden rounded-lg bg-[#1b2838] border border-white/5 group-hover/card:border-[#66c0f4]/30 transition-all shadow-xl">
-                            <img src={card.imageUrl} alt={card.name} className="w-full h-full object-cover scale-110 group-hover/card:scale-100 transition-transform duration-500" />
-                            {card.isFoil && <Badge className="absolute top-1 right-1 bg-yellow-500/90 text-[#1b2838] text-[7px] font-black border-none h-3 px-1 rounded-sm">FOIL</Badge>}
-                          </div>
-                          <p className="text-[10px] font-black text-white italic truncate tracking-tighter opacity-80 group-hover/card:opacity-100">${card.price.toFixed(2)}</p>
+                      <div className="flex items-center gap-5 mt-2.5">
+                        <div className="flex flex-col">
+                          <span className="text-[9px] font-black text-[#8f98a0] uppercase tracking-widest italic">Drops Value</span>
+                          <span className="text-sm font-black text-green-400 font-mono tracking-tighter">${game.droppableCardsValue.toFixed(2)}</span>
                         </div>
-                      ))}
+                        <div className="w-px h-5 bg-white/5"></div>
+                        <div className={`flex flex-col ${game.foilCards.length === 0 ? 'opacity-20' : ''}`}>
+                          <span className="text-[9px] font-black text-yellow-500/70 uppercase tracking-widest italic">Foil Price</span>
+                          <span className="text-sm font-black text-yellow-500 font-mono tracking-tighter">${game.foilCardsValue.toFixed(2)}</span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </Card>
-            ))}
+
+                    <div className={`flex items-center gap-2 ${viewMode === 'grid' ? 'mt-4 pt-4 border-t border-white/5 w-full justify-between' : ''}`}>
+                      {viewMode === 'list' && (
+                        <a href={`https://steamcommunity.com/market/search?q=${encodeURIComponent(game.gameName)}&appid=753`} target="_blank" className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-all group-hover:bg-[#66c0f4]/10">
+                          <ExternalLink className="w-4.5 h-4.5 text-[#4d535b] group-hover:text-[#66c0f4]" />
+                        </a>
+                      )}
+
+                      <Button
+                        variant="ghost"
+                        size={viewMode === 'grid' ? 'sm' : 'icon'}
+                        onClick={() => toggleGame(game.appId)}
+                        className={`rounded-xl h-11 ${viewMode === 'grid' ? 'flex-1 gap-2 text-[10px] font-black uppercase tracking-widest' : 'w-11 group-hover:bg-white/5'}`}
+                      >
+                        {viewMode === 'grid' && (expandedGames.has(game.appId) ? 'GİZLE' : 'KARTLARI GÖR')}
+                        <ChevronDown className={`w-5 h-5 text-[#4d535b] transition-transform duration-300 ${expandedGames.has(game.appId) ? 'rotate-180 text-[#66c0f4]' : ''}`} />
+                      </Button>
+                    </div>
+                  </CardContent>
+
+                  {expandedGames.has(game.appId) && (
+                    <div className="px-6 pb-6 pt-4 border-t border-white/5 bg-gradient-to-b from-black/40 to-transparent animate-in slide-in-from-top-4 duration-500">
+                      <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-4">
+                        {[...game.normalCards, ...game.foilCards].sort((a, b) => b.price - a.price).map((card, i) => (
+                          <div key={i} className="group/card relative">
+                            <div className="aspect-square overflow-hidden rounded-xl bg-[#1b2838] border border-white/5 hover:border-[#66c0f4]/40 transition-all shadow-2xl relative">
+                              <img src={card.imageUrl} alt={card.name} className="w-full h-full object-cover scale-110 group-hover/card:scale-100 transition-transform duration-700" title={card.name} />
+                              {card.isFoil && <Badge className="absolute top-1 right-1 bg-yellow-500 text-[#1b2838] text-[7px] font-black border-none h-4 px-1 rounded-sm shadow-lg">FOIL</Badge>}
+                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/card:opacity-100 transition-opacity flex items-center justify-center p-2 text-center">
+                                <span className="text-[8px] font-black text-white uppercase italic leading-tight">{card.name}</span>
+                              </div>
+                            </div>
+                            <p className="text-[11px] font-black text-white mt-1.5 italic text-center drop-shadow-lg font-mono">${card.price.toFixed(2)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              )
+            })}
           </div>
 
           {/* Footer Support */}
