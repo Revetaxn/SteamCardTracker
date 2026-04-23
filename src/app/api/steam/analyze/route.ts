@@ -532,71 +532,13 @@ export async function POST(request: NextRequest) {
           try {
             const apiGames = await fetchOwnedGamesViaAPI(profileInfo.steamId, apiKey.trim())
             if (apiGames.length > 0) {
-              const totalOwned = apiGames.length
-              send({ type: 'status', message: `Steam API'den ${totalOwned} oyun bulundu. Kartlı oyunlar filtreleniyor...` })
-
-              // Fetch badges pages to identify which games actually have trading cards
-              const badgesUrl =
-                parsedUrl.type === 'id'
-                  ? `https://steamcommunity.com/id/${parsedUrl.value}/badges/`
-                  : `https://steamcommunity.com/profiles/${parsedUrl.value}/badges/`
-
-              const badgeAppIds = new Set<number>()
-              try {
-                const firstPageHtml = await fetchPageHtml(badgesUrl)
-                const firstPageGames = parseBadgesPage(firstPageHtml)
-                for (const g of firstPageGames) badgeAppIds.add(g.appId)
-
-                const detectedPages = parseBadgesPageCount(firstPageHtml)
-                const maxPages = Math.max(detectedPages, 20)
-
-                let consecutiveEmptyPages = 0
-                for (let page = 2; page <= maxPages; page++) {
-                  try {
-                    const pageHtml = await fetchPageHtml(`${badgesUrl}?p=${page}`)
-                    const moreGames = parseBadgesPage(pageHtml)
-                    const newCount = moreGames.filter(g => !badgeAppIds.has(g.appId)).length
-                    for (const g of moreGames) badgeAppIds.add(g.appId)
-
-                    if (newCount === 0) {
-                      consecutiveEmptyPages++
-                      if (consecutiveEmptyPages >= 2) break
-                    } else {
-                      consecutiveEmptyPages = 0
-                    }
-
-                    send({
-                      type: 'status',
-                      message: `Badges sayfası ${page}/${maxPages} — ${badgeAppIds.size} kartlı oyun bulundu...`,
-                    })
-                  } catch {
-                    break
-                  }
-                }
-              } catch (err) {
-                console.error('Badges page fetch failed during API key scan:', err)
-              }
-
-              if (badgeAppIds.size > 0) {
-                // Filter to only games that have trading card badges
-                allGames = apiGames
-                  .filter(g => badgeAppIds.has(g.appId))
-                  .map(g => ({
-                    appId: g.appId,
-                    gameName: g.gameName,
-                    hasCardDrops: true,
-                  }))
-                send({ type: 'status', message: `${totalOwned} oyundan ${allGames.length} kartlı oyun filtrelendi.` })
-              } else {
-                // Badges fetch failed — fall back to all games
-                allGames = apiGames.map(g => ({
-                  appId: g.appId,
-                  gameName: g.gameName,
-                  hasCardDrops: g.playtime > 0,
-                }))
-                send({ type: 'status', message: `Badges filtresi başarısız, ${allGames.length} oyunun tamamı taranacak.` })
-              }
+              allGames = apiGames.map(g => ({
+                appId: g.appId,
+                gameName: g.gameName,
+                hasCardDrops: g.playtime > 0,
+              }))
               scanMethod = 'steam_web_api'
+              send({ type: 'status', message: `Steam API'den ${allGames.length} oyun bulundu. Kartlı oyunlar taranıyor...` })
             }
           } catch (err) {
             console.error('Steam Web API failed:', err)
@@ -732,7 +674,7 @@ export async function POST(request: NextRequest) {
           return
         }
 
-        // ===== Step 3: Fetch card prices for all games =====
+        // ===== Step 3: Fetch card prices for all games (sequential with adaptive delay) =====
         send({
           type: 'progress',
           current: 0,
@@ -742,9 +684,7 @@ export async function POST(request: NextRequest) {
         })
 
         const gameCards: GameCardInfo[] = []
-        const failedGames: typeof allGames = []
-        const batchSize = 5
-        const batchDelay = 600
+        let failedGames: typeof allGames = []
 
         const processGameResult = (game: typeof allGames[0], normalCards: CardInfo[], foilCards: CardInfo[]): GameCardInfo | null => {
           if (normalCards.length === 0) return null
@@ -777,58 +717,74 @@ export async function POST(request: NextRequest) {
           } as GameCardInfo
         }
 
-        for (let i = 0; i < allGames.length; i += batchSize) {
-          const batch = allGames.slice(i, i + batchSize)
+        // Sequential processing with adaptive delay
+        let currentDelay = 250 // start fast
+        let consecutiveSuccesses = 0
 
-          const batchResults = await Promise.all(
-            batch.map(async game => {
-              const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
-              if (failed) {
-                failedGames.push(game)
-                return null
-              }
-              return processGameResult(game, normalCards, foilCards)
-            })
-          )
+        for (let i = 0; i < allGames.length; i++) {
+          const game = allGames[i]
 
-          const validResults = batchResults.filter(Boolean) as GameCardInfo[]
-          gameCards.push(...validResults)
-
-          const processed = Math.min(i + batchSize, allGames.length)
-
-          send({
-            type: 'progress',
-            current: processed,
-            total: allGames.length,
-            found: gameCards.length,
-            message: `Kart fiyatları alınıyor... (${processed}/${allGames.length}) — ${gameCards.length} kartlı oyun bulundu`,
-          })
-
-          for (const gameResult of validResults) {
-            send({ type: 'game', data: gameResult })
+          if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, currentDelay))
           }
 
-          if (i + batchSize < allGames.length) {
-            await new Promise(resolve => setTimeout(resolve, batchDelay))
+          const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
+
+          if (failed) {
+            failedGames.push(game)
+            // Rate limited — slow down significantly
+            currentDelay = 3000
+            consecutiveSuccesses = 0
+          } else {
+            consecutiveSuccesses++
+            const result = processGameResult(game, normalCards, foilCards)
+            if (result) {
+              gameCards.push(result)
+              send({ type: 'game', data: result })
+            }
+            // Gradually speed up after consecutive successes
+            if (consecutiveSuccesses > 10) {
+              currentDelay = Math.max(200, currentDelay - 50)
+            } else if (consecutiveSuccesses > 5) {
+              currentDelay = Math.max(300, currentDelay - 30)
+            }
+          }
+
+          // Progress update every 5 games
+          if (i % 5 === 0 || i === allGames.length - 1) {
+            send({
+              type: 'progress',
+              current: i + 1,
+              total: allGames.length,
+              found: gameCards.length,
+              message: `Kart fiyatları alınıyor... (${i + 1}/${allGames.length}) — ${gameCards.length} kartlı oyun bulundu`,
+            })
           }
         }
 
-        // ===== Step 3b: Retry failed games one-by-one =====
-        if (failedGames.length > 0) {
+        // ===== Step 3b: Retry failed games (up to 3 rounds) =====
+        for (let round = 1; round <= 3 && failedGames.length > 0; round++) {
+          const retryList = [...failedGames]
+          failedGames = []
+
           send({
             type: 'status',
-            message: `${failedGames.length} başarısız oyun yeniden deneniyor...`,
+            message: `Başarısız ${retryList.length} oyun yeniden deneniyor (tur ${round}/3)...`,
           })
-          console.log(`[Retry] Retrying ${failedGames.length} failed games sequentially...`)
+          console.log(`[Retry] Round ${round}: Retrying ${retryList.length} failed games...`)
 
-          for (let i = 0; i < failedGames.length; i++) {
-            const game = failedGames[i]
-            // Wait before retry to avoid rate limit
-            await new Promise(resolve => setTimeout(resolve, 1500))
+          // Wait before starting retry round to let rate limit expire
+          await new Promise(resolve => setTimeout(resolve, 5000 * round))
+
+          for (let i = 0; i < retryList.length; i++) {
+            const game = retryList[i]
+            await new Promise(resolve => setTimeout(resolve, 2000))
 
             try {
               const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
-              if (!failed) {
+              if (failed) {
+                failedGames.push(game)
+              } else {
                 const result = processGameResult(game, normalCards, foilCards)
                 if (result) {
                   gameCards.push(result)
@@ -836,17 +792,24 @@ export async function POST(request: NextRequest) {
                 }
               }
             } catch (err) {
-              console.error(`[Retry] Final failure for ${game.gameName} (${game.appId}):`, err)
+              console.error(`[Retry] Failed for ${game.gameName} (${game.appId}):`, err)
+              failedGames.push(game)
             }
 
-            send({
-              type: 'progress',
-              current: allGames.length,
-              total: allGames.length,
-              found: gameCards.length,
-              message: `Başarısız oyunlar yeniden deneniyor... (${i + 1}/${failedGames.length}) — ${gameCards.length} kartlı oyun bulundu`,
-            })
+            if (i % 5 === 0 || i === retryList.length - 1) {
+              send({
+                type: 'progress',
+                current: allGames.length,
+                total: allGames.length,
+                found: gameCards.length,
+                message: `Yeniden deneme tur ${round} (${i + 1}/${retryList.length}) — ${gameCards.length} kartlı oyun bulundu`,
+              })
+            }
           }
+        }
+
+        if (failedGames.length > 0) {
+          console.warn(`[Final] ${failedGames.length} games could not be checked after all retries`)
         }
 
         gameCards.sort((a, b) => b.highestCardPrice - a.highestCardPrice)
