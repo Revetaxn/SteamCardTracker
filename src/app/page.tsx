@@ -64,6 +64,8 @@ const translations: Record<Lang, Record<string, string>> = {
     starting: 'Başlatılıyor...',
     gamesScanned: 'oyun tarandı',
     cardsFound: 'kartlı oyun bulundu',
+    fetchRemaining: 'Kalan Oyunları Getir',
+    scanInterrupted: 'Zama sınırı nedeniyle tarama durdu. Kalan oyunları getirmek için butona basın.',
 
     // Game tab
     gameUrlPlaceholder: 'Steam oyun linki veya App ID girin... (örn: https://store.steampowered.com/app/730/)',
@@ -179,6 +181,8 @@ const translations: Record<Lang, Record<string, string>> = {
     starting: 'Starting...',
     gamesScanned: 'games scanned',
     cardsFound: 'card games found',
+    fetchRemaining: 'Fetch Remaining Games',
+    scanInterrupted: 'Scan stopped due to time limit. Press the button to fetch remaining games.',
 
     // Game tab
     gameUrlPlaceholder: 'Enter Steam game URL or App ID... (e.g.: https://store.steampowered.com/app/730/)',
@@ -370,28 +374,35 @@ export default function Home() {
   const [showSupport, setShowSupport] = useState(false)
 
   // ===== Profile Analysis =====
-  const analyzeProfile = useCallback(async () => {
+  const analyzeProfile = useCallback(async (isMore = false) => {
     if (!url.trim()) return
 
-    abortControllerRef.current?.abort()
+    if (!isMore) {
+      abortControllerRef.current?.abort()
+    }
     const abortController = new AbortController()
     abortControllerRef.current = abortController
 
     setLoading(true)
     setError(null)
-    setGames([])
-    setProfile(null)
-    setTotalOwnedGames(0)
-    setScanMethod('')
-    setProgress(null)
+
+    if (!isMore) {
+      setGames([])
+      setProfile(null)
+      setTotalOwnedGames(0)
+      setScanMethod('')
+      setProgress(null)
+      setExpandedGames(new Set())
+    }
+
     setStatusMessage(t('starting'))
-    setExpandedGames(new Set())
 
     try {
+      const excludeIds = isMore ? games.map(g => g.appId) : []
       const response = await fetch('/api/steam/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim(), apiKey: apiKey.trim() || undefined, lang }),
+        body: JSON.stringify({ url: url.trim(), apiKey: apiKey.trim() || undefined, lang, excludeIds }),
         signal: abortController.signal,
       })
 
@@ -421,7 +432,7 @@ export default function Home() {
                     setStatusMessage(data.message)
                     break
                   case 'progress':
-                    setProgress({ current: data.current, total: data.total, found: data.found })
+                    setProgress({ current: data.current, total: data.total, found: (isMore ? games.length : 0) + data.found })
                     setStatusMessage(data.message)
                     break
                   case 'game':
@@ -432,9 +443,9 @@ export default function Home() {
                     })
                     break
                   case 'complete':
-                    setProfile(data.data.profile)
-                    setTotalOwnedGames(data.data.totalOwnedGames)
-                    setScanMethod(data.data.scanMethod)
+                    if (data.data.profile) setProfile(data.data.profile)
+                    if (data.data.totalOwnedGames) setTotalOwnedGames(data.data.totalOwnedGames)
+                    if (data.data.scanMethod) setScanMethod(data.data.scanMethod)
                     setGames(prev => [...prev].sort((a, b) => b.droppableCardsValue - a.droppableCardsValue))
                     setLoading(false)
                     break
@@ -459,7 +470,7 @@ export default function Home() {
     } finally {
       setLoading(false)
     }
-  }, [url, apiKey, lang, t])
+  }, [url, apiKey, lang, t, games])
 
   const cancelAnalysis = useCallback(() => {
     abortControllerRef.current?.abort()
@@ -521,16 +532,16 @@ export default function Home() {
 
   const sortedGames = games.length > 0
     ? [...games].sort((a, b) => {
-        let comparison = 0
-        switch (sortField) {
-          case 'highestCardPrice': comparison = a.highestCardPrice - b.highestCardPrice; break
-          case 'droppableCardsValue': comparison = a.droppableCardsValue - b.droppableCardsValue; break
-          case 'totalNormalCardsValue': comparison = a.totalNormalCardsValue - b.totalNormalCardsValue; break
-          case 'cardDropsTotal': comparison = a.cardDropsTotal - b.cardDropsTotal; break
-          case 'gameName': comparison = a.gameName.localeCompare(b.gameName); break
-        }
-        return sortDirection === 'desc' ? -comparison : comparison
-      })
+      let comparison = 0
+      switch (sortField) {
+        case 'highestCardPrice': comparison = a.highestCardPrice - b.highestCardPrice; break
+        case 'droppableCardsValue': comparison = a.droppableCardsValue - b.droppableCardsValue; break
+        case 'totalNormalCardsValue': comparison = a.totalNormalCardsValue - b.totalNormalCardsValue; break
+        case 'cardDropsTotal': comparison = a.cardDropsTotal - b.cardDropsTotal; break
+        case 'gameName': comparison = a.gameName.localeCompare(b.gameName); break
+      }
+      return sortDirection === 'desc' ? -comparison : comparison
+    })
     : []
 
   const getRankBadge = (index: number) => {
@@ -558,7 +569,7 @@ export default function Home() {
             alt={result.gameName}
             className="w-16 h-16 rounded-md object-cover bg-[#2a475e]/30 flex-shrink-0"
             onError={e => {
-              ;(e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0NCIgaGVpZ2h0PSI0NCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM0YTVhNmIiIHN0cm9rZS13aWR0aD0iMS41Ij48cmVjdCB4PSIzIiB5PSIzIiB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHJ4PSIyIi8+PHBhdGggZD0iTTggMjFoOCIvPjwvc3ZnPg=='
+              ; (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0NCIgaGVpZ2h0PSI0NCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM0YTVhNmIiIHN0cm9rZS13aWR0aD0iMS41Ij48cmVjdCB4PSIzIiB5PSIzIiB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHJ4PSIyIi8+PHBhdGggZD0iTTggMjFoOCIvPjwvc3ZnPg=='
             }}
           />
           <div className="flex-1 min-w-0">
@@ -635,7 +646,7 @@ export default function Home() {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
               {result.normalCards.map((card, idx) => (
                 <div key={idx} className="flex items-center gap-2 bg-green-500/5 border border-green-500/10 rounded-md px-2 py-1.5 hover:bg-green-500/10 transition-colors">
-                  <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
+                  <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ; (e.target as HTMLImageElement).style.display = 'none' }} />
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] text-[#c7d5e0] truncate">{card.name}</div>
                     <div className="text-[10px] text-green-400 font-medium">${card.price.toFixed(2)}</div>
@@ -658,7 +669,7 @@ export default function Home() {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
               {result.foilCards.map((card, idx) => (
                 <div key={idx} className="flex items-center gap-2 bg-yellow-500/5 border border-yellow-500/10 rounded-md px-2 py-1.5 hover:bg-yellow-500/10 transition-colors">
-                  <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
+                  <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ; (e.target as HTMLImageElement).style.display = 'none' }} />
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] text-[#c7d5e0] truncate">
                       {card.name} <span className="text-yellow-400">★</span>
@@ -691,22 +702,20 @@ export default function Home() {
           <div className="ml-auto flex items-center gap-1">
             <button
               onClick={() => setLang('tr')}
-              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${
-                lang === 'tr'
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${lang === 'tr'
                   ? 'bg-[#66c0f4]/20 text-[#66c0f4] border border-[#66c0f4]/30'
                   : 'text-[#8f98a0]/60 hover:text-[#8f98a0] hover:bg-[#2a475e]/30'
-              }`}
+                }`}
             >
               <Globe className="w-3 h-3" />
               TR
             </button>
             <button
               onClick={() => setLang('en')}
-              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${
-                lang === 'en'
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${lang === 'en'
                   ? 'bg-[#66c0f4]/20 text-[#66c0f4] border border-[#66c0f4]/30'
                   : 'text-[#8f98a0]/60 hover:text-[#8f98a0] hover:bg-[#2a475e]/30'
-              }`}
+                }`}
             >
               <Globe className="w-3 h-3" />
               EN
@@ -939,7 +948,7 @@ export default function Home() {
                                     className="w-11 h-11 rounded object-cover bg-[#2a475e]/30 flex-shrink-0"
                                     loading="lazy"
                                     onError={e => {
-                                      ;(e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0NCIgaGVpZ2h0PSI0NCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM0YTVhNmIiIHN0cm9rZS13aWR0aD0iMS41Ij48cmVjdCB4PSIzIiB5PSIzIiB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHJ4PSIyIi8+PHBhdGggZD0iTTggMjFoOCIvPjwvc3ZnPg=='
+                                      ; (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0NCIgaGVpZ2h0PSI0NCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM0YTVhNmIiIHN0cm9rZS13aWR0aD0iMS41Ij48cmVjdCB4PSIzIiB5PSIzIiB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHJ4PSIyIi8+PHBhdGggZD0iTTggMjFoOCIvPjwvc3ZnPg=='
                                     }}
                                   />
                                   <div className="flex-1 min-w-0">
@@ -990,7 +999,7 @@ export default function Home() {
                                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
                                         {game.normalCards.map((card, idx) => (
                                           <div key={idx} className="flex items-center gap-2 bg-green-500/5 border border-green-500/10 rounded-md px-2 py-1.5 hover:bg-green-500/10 transition-colors">
-                                            <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
+                                            <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ; (e.target as HTMLImageElement).style.display = 'none' }} />
                                             <div className="flex-1 min-w-0">
                                               <div className="text-[11px] text-[#c7d5e0] truncate">{card.name}</div>
                                               <div className="text-[10px] text-green-400 font-medium">${card.price.toFixed(2)}</div>
@@ -1011,7 +1020,7 @@ export default function Home() {
                                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
                                         {game.foilCards.map((card, idx) => (
                                           <div key={idx} className="flex items-center gap-2 bg-yellow-500/5 border border-yellow-500/10 rounded-md px-2 py-1.5 hover:bg-yellow-500/10 transition-colors">
-                                            <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ;(e.target as HTMLImageElement).style.display = 'none' }} />
+                                            <img src={card.imageUrl} alt={card.name} className="w-7 h-7 rounded object-cover bg-[#2a475e]/30 flex-shrink-0" loading="lazy" onError={e => { ; (e.target as HTMLImageElement).style.display = 'none' }} />
                                             <div className="flex-1 min-w-0">
                                               <div className="text-[11px] text-[#c7d5e0] truncate">
                                                 {card.name} <span className="text-yellow-400">★</span>
@@ -1039,6 +1048,18 @@ export default function Home() {
                       <div className="flex items-center justify-center py-4 gap-2 text-[#66c0f4]">
                         <Loader2 className="w-4 h-4 animate-spin" />
                         <span className="text-xs">{statusMessage}</span>
+                      </div>
+                    )}
+
+                    {!loading && progress && progress.current < progress.total && (
+                      <div className="py-6 flex flex-col items-center gap-3 bg-[#66c0f4]/5 rounded-lg border border-[#66c0f4]/10 mt-2">
+                        <div className="text-xs text-[#8f98a0] text-center px-4">
+                          {t('scanInterrupted')} ({progress.current}/{progress.total})
+                        </div>
+                        <Button onClick={() => analyzeProfile(true)} className="bg-[#66c0f4] hover:bg-[#4fa3d6] text-[#1b2838] font-bold">
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          {t('fetchRemaining')}
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -1258,11 +1279,10 @@ export default function Home() {
         {/* Support FAB Button */}
         <button
           onClick={() => setShowSupport(prev => !prev)}
-          className={`w-12 h-12 rounded-full shadow-lg shadow-black/30 flex items-center justify-center transition-all duration-200 ${
-            showSupport
+          className={`w-12 h-12 rounded-full shadow-lg shadow-black/30 flex items-center justify-center transition-all duration-200 ${showSupport
               ? 'bg-[#2a475e] hover:bg-[#2a475e]/80 text-[#8f98a0] rotate-0'
               : 'bg-gradient-to-br from-pink-500 to-rose-600 hover:from-pink-400 hover:to-rose-500 text-white hover:scale-105 active:scale-95'
-          }`}
+            }`}
         >
           {showSupport ? (
             <X className="w-5 h-5" />

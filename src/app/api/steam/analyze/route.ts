@@ -133,20 +133,6 @@ function parseBadgesPage(html: string) {
   return games
 }
 
-async function fetchGamesFromXML(baseUrl: string) {
-  try {
-    const xmlUrl = baseUrl.endsWith('/') ? `${baseUrl}games?xml=1` : `${baseUrl}/games?xml=1`
-    const html = await fetchPageHtml(xmlUrl)
-    const games: any[] = []
-    const pattern = /<game>\s*<appID>(\d+)<\/appID>\s*<name>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/name>/gs
-    let match
-    while ((match = pattern.exec(html)) !== null) {
-      games.push({ appId: parseInt(match[1]), gameName: cleanGameName(match[2]) })
-    }
-    return games
-  } catch { return [] }
-}
-
 async function fetchOwnedGamesViaAPI(steamId: string, apiKey: string) {
   const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamId}&include_appinfo=1&format=json`
   const resp = await fetch(url)
@@ -178,9 +164,10 @@ async function fetchCardPrices(appId: number, gameName: string) {
   } catch { return { normalCards: [], foilCards: [], failed: true } }
 }
 
+// ===== Main POST Handler =====
 export async function POST(request: NextRequest) {
   try {
-    const { url, apiKey } = await request.json()
+    const { url, apiKey, excludeIds = [] } = await request.json()
     const parsed = parseSteamUrl(url)
     if (!parsed) return new Response(JSON.stringify({ error: 'invalid url' }), { status: 400 })
 
@@ -195,44 +182,56 @@ export async function POST(request: NextRequest) {
           const pInfo = parseProfileInfo(await fetchPageHtml(baseUrl))
           if (!pInfo) { send({ type: 'error', message: 'Profil gizli veya hatalı.' }); return controller.close() }
 
-          const [apiG, xmlG] = await Promise.all([
-            apiKey?.trim() ? fetchOwnedGamesViaAPI(pInfo.steamId, apiKey.trim()).catch(() => []) : Promise.resolve([]),
-            fetchGamesFromXML(baseUrl)
-          ])
+          // Discovery Phase
+          send({ type: 'status', message: 'Kütüphane listesi alınıyor...' })
+          const apiG = (apiKey?.trim() && apiKey !== 'undefined')
+            ? await fetchOwnedGamesViaAPI(pInfo.steamId, apiKey.trim()).catch(() => [])
+            : []
 
+          send({ type: 'status', message: 'Rozetler taranıyor...' })
           const badgeG: any[] = []
-          for (let p = 1; p <= 30; p++) {
+          for (let p = 1; p <= 50; p++) {
             const pHtml = await fetchPageHtml(`${baseUrl}badges/?p=${p}`).catch(() => '')
+            if (!pHtml) break
             const pG = parseBadgesPage(pHtml)
             if (pG.length === 0) break
             let added = 0
             pG.forEach(g => { if (!badgeG.some(e => e.appId === g.appId)) { badgeG.push(g); added++ } })
             if (added === 0 && p > 1) break
+            send({ type: 'status', message: `Rozet taranıyor: Sayfa ${p} (${badgeG.length} oyun)...` })
           }
 
           const lib = new Map()
           apiG.forEach((g: any) => lib.set(g.appId, g.gameName))
-          xmlG.forEach((g: any) => lib.set(g.appId, g.gameName))
           badgeG.forEach((g: any) => lib.set(g.appId, g.gameName))
 
           const rawIds = Array.from(lib.keys())
-          send({ type: 'status', message: `${rawIds.length} oyun süzgeçten geçiriliyor...` })
+          send({ type: 'status', message: `${rawIds.length} oyun filtreleniyor...` })
 
-          const { confirmed, others } = await bulkCheckGamesForCards(rawIds)
-          // Prioritize confirmed games, then a few others just in case
-          const candidates = [
-            ...confirmed.map(id => ({ appId: id, gameName: lib.get(id) || `Game ${id}`, priority: true })),
-            ...others.slice(0, 50).map(id => ({ appId: id, gameName: lib.get(id) || `Game ${id}`, priority: false }))
-          ]
+          const { confirmed } = await bulkCheckGamesForCards(rawIds)
 
-          console.log(`[Discovery] Unique:${rawIds.length} Confirmed:${confirmed.length} Scanning:${candidates.length}`)
-          send({ type: 'status', message: `${candidates.length} oyun için fiyat taranıyor (Limit korumalı)...` })
+          // CANDIDATES: Combine Badges (High Confidence) + Store API Discovery
+          const scanMap = new Map()
+          badgeG.forEach(g => scanMap.set(g.appId, g.gameName))
+          confirmed.forEach(id => { if (!scanMap.has(id)) scanMap.set(id, lib.get(id) || `Game ${id}`) })
+
+          const excludeSet = new Set(excludeIds)
+          const candidates = Array.from(scanMap.keys())
+            .filter(id => !excludeSet.has(id))
+            .map(id => ({ appId: id, gameName: scanMap.get(id) }))
+
+          console.log(`[Discovery] Unique:${rawIds.length} Candidates:${candidates.length} (Excluded:${excludeIds.length})`)
+          send({ type: 'status', message: `${candidates.length} yeni kartlı oyun taranacak...` })
+
+          if (candidates.length === 0) {
+            send({ type: 'complete', data: { profile: pInfo, games: [] } })
+            return controller.close()
+          }
 
           const gameCards: any[] = []
           for (let i = 0; i < candidates.length; i++) {
             const game = candidates[i]
-            // FIXED: Constant 1400ms delay to bypass the 28-game IP wall
-            if (i > 0) await new Promise(r => setTimeout(r, 1400))
+            if (i > 0) await new Promise(r => setTimeout(r, 1300))
 
             const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
             if (!failed && normalCards.length > 0) {
@@ -247,13 +246,14 @@ export async function POST(request: NextRequest) {
               }
               gameCards.push(res); send({ type: 'game', data: res })
             }
-            send({ type: 'progress', current: i + 1, total: candidates.length, found: gameCards.length, message: `${i + 1}/${candidates.length}` })
+            // Send progress relative to current batch
+            send({ type: 'progress', current: i + 1 + excludeIds.length, total: candidates.length + excludeIds.length, found: gameCards.length, message: `${i + 1 + excludeIds.length}/${candidates.length + excludeIds.length}` })
           }
 
           gameCards.sort((a, b) => b.droppableCardsValue - a.droppableCardsValue)
           send({ type: 'complete', data: { profile: pInfo, games: gameCards } })
           controller.close()
-        } catch (err) { console.error(err); send({ type: 'error', message: 'Bir hata oluştu.' }); controller.close() }
+        } catch (err) { console.error(err); send({ type: 'error', message: 'Hata oluştu. Profilinizin gizli olup olmadığını kontrol edin.' }); controller.close() }
       }
     })
     return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no', 'Connection': 'keep-alive' } })
