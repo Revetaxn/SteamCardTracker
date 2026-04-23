@@ -1,5 +1,8 @@
 import { NextRequest } from 'next/server'
 
+export const maxDuration = 300 // 5 minutes
+export const dynamic = 'force-dynamic'
+
 // ===== Types =====
 interface CardInfo {
   name: string
@@ -279,6 +282,49 @@ function parseSteamGamesPage(
   }
 
   return games
+}
+
+// ===== Helper: Check if games have trading cards via Store API (Bulk-ish) =====
+async function checkGamesForCards(
+  appIds: number[],
+  onProgress?: (current: number, total: number) => void
+): Promise<number[]> {
+  const cardGames: number[] = []
+  const batchSize = 10
+
+  for (let i = 0; i < appIds.length; i += batchSize) {
+    const batch = appIds.slice(i, i + batchSize)
+
+    // Process batch in parallel
+    await Promise.all(batch.map(async (appId) => {
+      try {
+        const url = `https://store.steampowered.com/api/appdetails?appids=${appId}&filters=categories`
+        const response = await fetchWithRetry(url, { signal: AbortSignal.timeout(10000) }, 1, 500)
+
+        if (response.ok) {
+          const data = await response.json()
+          if (data && data[appId] && data[appId].success && data[appId].data) {
+            const categories = data[appId].data.categories || []
+            const hasCards = categories.some((c: { id: number }) => c.id === 29)
+            if (hasCards) {
+              cardGames.push(appId)
+            }
+          }
+        }
+      } catch (err) {
+        // Silent fail for single game
+      }
+    }))
+
+    if (onProgress) onProgress(Math.min(i + batchSize, appIds.length), appIds.length)
+
+    // Brief delay between batches to be safe
+    if (i + batchSize < appIds.length) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+  }
+
+  return cardGames
 }
 
 // ===== Helper: Parse Steam XML games endpoint =====
@@ -670,83 +716,50 @@ export async function POST(request: NextRequest) {
           console.error('Badges scan failed:', err)
         }
 
-        // --- Final Merge ---
-        if (apiOwnedGames.length > 0) {
-          // If we have API data, we use all games that have cards detected in badges
-          // OR if badges failed, we use all API games with playtime
-          if (cardEligibleGames.length > 0) {
-            allGames = cardEligibleGames.map(cg => {
-              const apiGame = apiOwnedGames.find(ag => ag.appId === cg.appId)
-              return {
-                appId: cg.appId,
-                gameName: apiGame ? apiGame.gameName : cg.gameName,
-                hasCardDrops: cg.hasCardDrops,
-                cardDropsRemaining: cg.cardDropsRemaining
-              }
+        // --- Final Merge and Library Scanning ---
+        send({ type: 'status', message: 'Tüm kütüphane taranıyor (Kartlı oyunlar tespit ediliyor)...' })
+
+        // Combine games from all sources
+        const libraryMap = new Map<number, string>()
+        apiOwnedGames.forEach(g => libraryMap.set(g.appId, g.gameName))
+
+        // Also add from badges as they have names too
+        cardEligibleGames.forEach(g => {
+          if (!libraryMap.has(g.appId)) libraryMap.set(g.appId, g.gameName)
+        })
+
+        const allLibraryAppIds = Array.from(libraryMap.keys())
+
+        // Deep scan: use Store API to find ALL games with cards (including unplayed)
+        const confirmedCardAppIds = await checkGamesForCards(allLibraryAppIds, (current, total) => {
+          if (current % 50 === 0 || current === total) {
+            send({
+              type: 'status',
+              message: `Kütüphane taranıyor: ${current}/${total} oyun kontrol edildi...`
             })
-            scanMethod = 'web_api_plus_badges'
-          } else {
-            allGames = apiOwnedGames.map(g => ({
-              appId: g.appId,
-              gameName: g.gameName,
-              hasCardDrops: g.playtime > 0
-            }))
-            scanMethod = 'web_api_only'
           }
-        } else {
-          // No API key, use badges only
-          allGames = cardEligibleGames
-          scanMethod = 'badges_only'
-        }
+        })
 
-        // Final fallback if still empty
-        if (allGames.length === 0) {
-          try {
-            send({ type: 'status', message: 'Diğer kaynaklar deneniyor (Games Page)...' })
-            const profileGames = await fetchGamesFromSteamAPI(profileInfo.steamId)
-            if (profileGames.length > 0) {
-              allGames = profileGames.map(g => ({
-                appId: g.appId,
-                gameName: g.gameName,
-                hasCardDrops: g.playtime > 0
-              }))
-              scanMethod = 'games_page'
-            }
-          } catch { }
-        }
+        // Build the final allGames list
+        allGames = confirmedCardAppIds.map(appId => ({
+          appId,
+          gameName: libraryMap.get(appId) || `Game ${appId}`,
+          hasCardDrops: true // If confirmed via Store API
+        }))
 
-        if (allGames.length === 0) {
-          try {
-            send({ type: 'status', message: 'Diğer kaynaklar deneniyor (XML)...' })
-            const xmlUrl = `https://steamcommunity.com/profiles/${profileInfo.steamId}/games/?xml=1`
-            const xmlHtml = await fetchPageHtml(xmlUrl)
-            const xmlGames = parseSteamXMLGames(xmlHtml)
-            if (xmlGames.length > 0) {
-              allGames = xmlGames.map(g => ({
-                appId: g.appId,
-                gameName: g.gameName,
-                hasCardDrops: g.playtime > 0
-              }))
-              scanMethod = 'steam_xml'
-            }
-          } catch { }
-        }
+        scanMethod = apiOwnedGames.length > 0 ? 'api_plus_store_scan' : 'store_scan'
+        send({ type: 'status', message: `${allGames.length} kartlı oyun tespit edildi. Fiyatlar alınıyor...` })
 
         if (allGames.length === 0) {
           send({
             type: 'error',
-            message: 'Hiç oyun bulunamadı. Profil gizli olabilir veya geçersiz bir URL girdiniz.',
+            message: 'Kartlı oyun bulunamadı. Lütfen profilinizin ve oyun kütüphanenizin halka açık olduğundan emin olun.',
           })
           try { controller.close() } catch { }
           return
         }
 
-        // ===== Step 3: Fetch card prices for all games (sequential with adaptive delay) =====
-        send({
-          type: 'status',
-          message: `${allGames.length} kartlı oyun için fiyatlar alınıyor...`,
-        })
-
+        // ===== Step 3: Fetch card prices for all confirmed games (sequential with adaptive delay) =====
         send({
           type: 'progress',
           current: 0,
@@ -785,7 +798,7 @@ export async function POST(request: NextRequest) {
             cardDropsTotal,
             droppableCardsValue,
             avgCardPrice,
-            hasCardDrops: game.hasCardDrops ?? false,
+            hasCardDrops: true,
           } as GameCardInfo
         }
 
