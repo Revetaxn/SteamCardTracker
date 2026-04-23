@@ -42,21 +42,20 @@ interface ProfileInfo {
 async function fetchWithRetry(
   url: string,
   options: RequestInit & { signal?: AbortSignal } = {},
-  maxRetries = 3,
-  baseDelay = 1500
+  maxRetries = 2,
+  baseDelay = 1000
 ): Promise<Response> {
   let lastError: Error | null = null
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await fetch(url, {
         ...options,
-        signal: options.signal || AbortSignal.timeout(20000),
+        signal: options.signal || AbortSignal.timeout(15000),
       })
 
       if (response.status === 429 || response.status >= 500) {
         if (attempt < maxRetries) {
           let delay = baseDelay * Math.pow(2, attempt)
-          console.log(`[Retry] ${response.status} for ${url.substring(0, 80)}... waiting ${delay}ms`)
           await new Promise(resolve => setTimeout(resolve, delay))
           continue
         }
@@ -74,7 +73,7 @@ async function fetchWithRetry(
 }
 
 // ===== Helper: Fetch page HTML =====
-async function fetchPageHtml(url: string, timeout = 20000): Promise<string> {
+async function fetchPageHtml(url: string, timeout = 15000): Promise<string> {
   const response = await fetchWithRetry(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -83,6 +82,37 @@ async function fetchPageHtml(url: string, timeout = 20000): Promise<string> {
   }, 2, 1000)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return await response.text()
+}
+
+// ===== Helper: Bulk Check games for cards via Store API =====
+async function bulkCheckGamesForCards(appIds: number[]): Promise<{ confirmed: number[]; delisted: number[] }> {
+  const confirmed: number[] = []
+  const delisted: number[] = []
+  const batchSize = 50
+
+  for (let i = 0; i < appIds.length; i += batchSize) {
+    const batch = appIds.slice(i, i + batchSize)
+    const url = `https://store.steampowered.com/api/appdetails?appids=${batch.join(',')}&filters=categories`
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(15000) })
+      if (resp.ok) {
+        const data = await resp.json()
+        batch.forEach(id => {
+          if (data && data[id]) {
+            if (data[id].success && data[id].data) {
+              const cats = data[id].data.categories || []
+              if (cats.some((c: any) => c.id === 29)) confirmed.push(id)
+            } else if (data[id].success === false) {
+              delisted.push(id)
+            }
+          }
+        })
+      }
+    } catch {
+      batch.forEach(id => delisted.push(id))
+    }
+  }
+  return { confirmed, delisted }
 }
 
 // ===== Helper: Parse Steam URL =====
@@ -97,17 +127,6 @@ function parseSteamUrl(url: string): { type: 'id' | 'profiles'; value: string } 
 
 function cleanGameName(raw: string): string {
   return raw.replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/<[^>]+>/g, '').trim()
-}
-
-// ===== Helper: Resolve vanity URL =====
-async function resolveVanityUrl(vanityName: string): Promise<string | null> {
-  try {
-    const html = await fetchPageHtml(`https://steamcommunity.com/id/${vanityName}/`)
-    const profileMatch = html.match(/g_rgProfileData\s*=\s*({[^}]+})/)
-    if (profileMatch) return JSON.parse(profileMatch[1]).steamid || null
-    const idMatch = html.match(/steamid":"(\d{17})"/)
-    return idMatch ? idMatch[1] : null
-  } catch { return null }
 }
 
 function parseProfileInfo(html: string): ProfileInfo | null {
@@ -225,47 +244,66 @@ export async function POST(request: NextRequest) {
           scrapedG.forEach((g: any) => lib.set(g.appId, g.gameName))
           badgeG.forEach((g: any) => lib.set(g.appId, g.gameName))
 
-          const candidates = Array.from(lib.keys()).map(id => ({ appId: id, gameName: lib.get(id) }))
-          console.log(`[Discovery] API:${apiG.length} Scraped:${scrapedG.length} Badges:${badgeG.length} Total Unique:${candidates.length}`)
+          const rawIds = Array.from(lib.keys())
+          send({ type: 'status', message: `${rawIds.length} oyun kütüphaneden çekildi. Filtreler uygulanıyor...` })
 
-          send({ type: 'status', message: `${candidates.length} oyun taranacak...` })
-          const gameCards: any[] = []
-          let curDelay = 250
+          const { confirmed, delisted } = await bulkCheckGamesForCards(rawIds)
+          const candidates = [...confirmed, ...delisted].map(id => ({ appId: id, gameName: lib.get(id) || `Game ${id}`, isDelisted: delisted.includes(id) }))
 
-          for (let i = 0; i < candidates.length; i++) {
-            const game = candidates[i]
-            if (i > 0 && i % 25 === 0) {
-              send({ type: 'status', message: `IP Limiti bekleniyor... (${Math.round((candidates.length - i) / 25 * 10)}s kaldı)` })
-              await new Promise(r => setTimeout(r, 10000))
-            } else if (i > 0) {
-              await new Promise(r => setTimeout(r, curDelay))
-            }
+          console.log(`[Discovery] Total Library: ${rawIds.length}, Confirmed: ${confirmed.length}, Delisted/Mixed: ${delisted.length}`)
+          send({ type: 'status', message: `${candidates.length} kartlı oyun fiyatları taranacak...` })
 
-            const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
-            if (!failed && normalCards.length > 0) {
-              const res = {
-                appId: game.appId,
-                gameName: game.gameName,
-                gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
-                normalCards, foilCards,
-                highestCardPrice: normalCards[0].price,
-                highestCardName: normalCards[0].name,
-                totalNormalCardsValue: normalCards.reduce((s, c) => s + c.price, 0),
-                totalNormalCards: normalCards.length,
-                totalFoilCards: foilCards.length,
-                cardDropsTotal: Math.ceil(normalCards.length / 2),
-                droppableCardsValue: (normalCards.reduce((s, c) => s + c.price, 0) / normalCards.length) * Math.ceil(normalCards.length / 2),
-                avgCardPrice: normalCards.reduce((s, c) => s + c.price, 0) / normalCards.length,
-                hasCardDrops: true
+          let gameCards: any[] = []
+          let failedQueue: any[] = []
+          let curDelay = 200
+
+          const doScan = async (list: any[], isRetry = false) => {
+            for (let i = 0; i < list.length; i++) {
+              const game = list[i]
+              if (i > 0 && i % 25 === 0) {
+                await new Promise(r => setTimeout(r, 12000))
+              } else if (i > 0) {
+                await new Promise(r => setTimeout(r, curDelay))
               }
-              gameCards.push(res); send({ type: 'game', data: res })
-            }
-            if (failed) curDelay = Math.min(3000, curDelay + 500)
-            else curDelay = Math.max(250, curDelay - 50)
 
-            if (i % 5 === 0 || i === candidates.length - 1) {
-              send({ type: 'progress', current: i + 1, total: candidates.length, found: gameCards.length, message: `${i + 1}/${candidates.length}` })
+              const { normalCards, foilCards, failed } = await fetchCardPrices(game.appId, game.gameName)
+              if (failed) {
+                console.warn(`[Market] FAILED: ${game.gameName}`)
+                if (!isRetry) failedQueue.push(game)
+                curDelay = Math.min(3000, curDelay + 500)
+              } else {
+                if (normalCards.length > 0) {
+                  const res = {
+                    appId: game.appId, gameName: game.gameName,
+                    gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
+                    normalCards, foilCards,
+                    highestCardPrice: normalCards[0].price,
+                    highestCardName: normalCards[0].name,
+                    totalNormalCardsValue: normalCards.reduce((s, c) => s + c.price, 0),
+                    totalNormalCards: normalCards.length,
+                    totalFoilCards: foilCards.length,
+                    cardDropsTotal: Math.ceil(normalCards.length / 2),
+                    droppableCardsValue: (normalCards.reduce((s, c) => s + c.price, 0) / normalCards.length) * Math.ceil(normalCards.length / 2),
+                    avgCardPrice: normalCards.reduce((s, c) => s + c.price, 0) / normalCards.length,
+                    hasCardDrops: true
+                  }
+                  gameCards.push(res); send({ type: 'game', data: res })
+                }
+                curDelay = Math.max(200, curDelay - 20)
+              }
+
+              if (i % 5 === 0 || i === list.length - 1) {
+                send({ type: 'progress', current: isRetry ? candidates.length : i + 1, total: candidates.length, found: gameCards.length, message: `${isRetry ? 'Yeniden Deneniyor' : 'Taranıyor'}: ${i + 1}/${list.length}` })
+              }
             }
+          }
+
+          await doScan(candidates)
+
+          if (failedQueue.length > 0) {
+            console.log(`[Retry] Starting second pass for ${failedQueue.length} games...`)
+            await new Promise(r => setTimeout(r, 15000))
+            await doScan(failedQueue, true)
           }
 
           gameCards.sort((a, b) => b.highestCardPrice - a.highestCardPrice)
