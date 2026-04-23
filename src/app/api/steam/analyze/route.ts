@@ -184,26 +184,44 @@ function parseBadgesPage(
   html: string
 ): { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] {
   const games: { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] = []
-  const gamecardPattern =
-    /gamecards\/(\d+)\/"[^>]*>[\s\S]*?<div class="badge_title"[^>]*>\s*([\s\S]*?)\s*(&nbsp;|<\/div>)/g
+
+  // More inclusive pattern: matches any gamecard link on the badges page
+  const gamecardPattern = /gamecards\/(\d+)\//g
 
   let match
+  const seenAppIds = new Set<number>()
+
   while ((match = gamecardPattern.exec(html)) !== null) {
     const appId = parseInt(match[1])
-    const gameName = cleanGameName(match[2])
+    if (!appId || seenAppIds.has(appId)) continue
+    seenAppIds.add(appId)
 
-    if (appId && gameName && !games.some(g => g.appId === appId)) {
-      const rowStart = Math.max(0, match.index - 2000)
-      const rowEnd = Math.min(html.length, match.index + 3000)
-      const rowContext = html.substring(rowStart, rowEnd)
+    const startPos = Math.max(0, match.index - 500)
+    const endPos = Math.min(html.length, match.index + 2000)
+    const context = html.substring(startPos, endPos)
 
-      // Parse "X card drops remaining" or "X card drop remaining"
-      const dropsMatch = rowContext.match(/(\d+)\s+card\s+drops?\s+remain/i)
-      const cardDropsRemaining = dropsMatch ? parseInt(dropsMatch[1]) : 0
-      const hasCardDrops = cardDropsRemaining > 0
-
-      games.push({ appId, gameName, hasCardDrops, cardDropsRemaining })
+    // Extract game name - look for badge_title or similar
+    let gameName = ''
+    const titleMatch = context.match(/badge_title"[^>]*>\s*([\s\S]*?)\s*(?:&nbsp;|<\/div>)/i)
+    if (titleMatch) {
+      gameName = cleanGameName(titleMatch[1])
+    } else {
+      // Fallback for games with zero progress (might have different HTML)
+      const secondaryTitleMatch = context.match(/badge_row_type[^>]*>\s*([\s\S]*?)\s*<\/div>/i)
+      if (secondaryTitleMatch) {
+        gameName = cleanGameName(secondaryTitleMatch[1]).replace(/Trading Card Badge/i, '').trim()
+      }
     }
+
+    // Default name if still not found
+    if (!gameName) gameName = `Game ${appId}`
+
+    // Parse "X card drops remaining"
+    const dropsMatch = context.match(/(\d+)\s+card\s+drops?\s+remain/i)
+    const cardDropsRemaining = dropsMatch ? parseInt(dropsMatch[1]) : 0
+    const hasCardDrops = cardDropsRemaining > 0
+
+    games.push({ appId, gameName, hasCardDrops, cardDropsRemaining })
   }
 
   return games
@@ -213,15 +231,18 @@ function parseBadgesPage(
 function parseBadgesPageCount(html: string): number {
   let maxPage = 1
 
-  const pageLinkMatches = [...html.matchAll(/(?:\?p=|page=)(\d+)/g)]
-  for (const m of pageLinkMatches) {
+  // Matches ?p=X or page=X or simply numbers in the pagination bar
+  const pageMatches = html.matchAll(/(?:\?p=|page=|\/badges\/)(\d+)/g)
+  for (const m of pageMatches) {
     const p = parseInt(m[1])
-    if (p > maxPage) maxPage = p
+    if (p > maxPage && p < 200) maxPage = p // Cap at 200 pages to be safe
   }
 
-  const pageOfMatch = html.match(/Page\s+\d+\s+of\s+(\d+)/i)
-  if (pageOfMatch) {
-    maxPage = Math.max(maxPage, parseInt(pageOfMatch[1]))
+  // Also check "Page 1 of X" text
+  const ofMatch = html.match(/(\d+)\s+of\s+(\d+)/i)
+  if (ofMatch && ofMatch[2]) {
+    const p = parseInt(ofMatch[2])
+    if (p > maxPage) maxPage = p
   }
 
   return maxPage
@@ -336,6 +357,35 @@ async function fetchOwnedGamesViaAPI(
     console.error('Steam Web API error:', err)
     throw err
   }
+}
+
+// ===== Helper: Fetch appIds of games that have trading card badges =====
+// Uses IPlayerService/GetBadges/v1 — returns all badge data in ONE request
+async function fetchCardEligibleAppIds(
+  steamId: string,
+  apiKey: string
+): Promise<Set<number>> {
+  const appIds = new Set<number>()
+  try {
+    const url = `https://api.steampowered.com/IPlayerService/GetBadges/v1/?key=${apiKey}&steamid=${steamId}`
+    const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+    if (!response.ok) {
+      console.error(`GetBadges API error: ${response.status}`)
+      return appIds
+    }
+    const data = await response.json()
+    const badges: { appid?: number; badgeid?: number }[] = data?.response?.badges || []
+    // Only keep game badges (appid > 0, badgeid === 1 means trading card badge)
+    for (const b of badges) {
+      if (b.appid && b.appid > 0) {
+        appIds.add(b.appid)
+      }
+    }
+    console.log(`[GetBadges] Found ${appIds.size} games with card badges`)
+  } catch (err) {
+    console.error('GetBadges API error:', err)
+  }
+  return appIds
 }
 
 // ===== Helper: Fetch card prices from Steam Market API =====
@@ -533,143 +583,129 @@ export async function POST(request: NextRequest) {
         }[] = []
         let scanMethod = 'unknown'
 
-        // --- Source 0: Steam Web API (requires API key — most reliable) ---
+        // --- Source 0: Steam Web API (requires API key) ---
+        let apiOwnedGames: { appId: number; gameName: string; playtime: number }[] = []
         if (apiKey && typeof apiKey === 'string' && apiKey.trim()) {
-          send({ type: 'status', message: 'Steam Web API ile tüm oyunlar çekiliyor...' })
+          send({ type: 'status', message: 'Steam Web API ile kütüphane çekiliyor...' })
           try {
-            const apiGames = await fetchOwnedGamesViaAPI(profileInfo.steamId, apiKey.trim())
-            if (apiGames.length > 0) {
-              allGames = apiGames.map(g => ({
-                appId: g.appId,
-                gameName: g.gameName,
-                hasCardDrops: g.playtime > 0,
-              }))
-              scanMethod = 'steam_web_api'
-              send({ type: 'status', message: `Steam API'den ${allGames.length} oyun bulundu. Kartlı oyunlar taranıyor...` })
+            apiOwnedGames = await fetchOwnedGamesViaAPI(profileInfo.steamId, apiKey.trim())
+            if (apiOwnedGames.length > 0) {
+              send({ type: 'status', message: `API üzerinden ${apiOwnedGames.length} oyun bulundu.` })
             }
           } catch (err) {
             console.error('Steam Web API failed:', err)
-            send({ type: 'status', message: 'Steam API hatası, diğer kaynaklar deneniyor...' })
           }
         }
 
-        // --- Source 1: Steam Games Page (direct fetch) ---
-        if (allGames.length === 0) {
-          send({
-            type: 'status',
-            message: 'Steam profilinden oyunlar çekiliyor...',
-          })
+        // --- Step 2b: Card Discovery via Badges Page (HTML) ---
+        // We always try this because it identifies which games actually have cards
+        send({ type: 'status', message: 'Kartlı oyunlar tespit ediliyor...' })
 
-          try {
-            const apiGames = await fetchGamesFromSteamAPI(profileInfo.steamId)
-            if (apiGames.length > 0) {
-              allGames = apiGames.map(g => ({
-                appId: g.appId,
-                gameName: g.gameName,
-                hasCardDrops: g.playtime > 0,
-              }))
-              scanMethod = 'games_page'
-              send({
-                type: 'status',
-                message: `Steam profilinden ${allGames.length} oyun bulundu.`,
-              })
-            }
-          } catch (err) {
-            console.error('Games page fetch failed:', err)
-          }
-        }
+        const badgesUrl =
+          parsedUrl.type === 'id'
+            ? `https://steamcommunity.com/id/${parsedUrl.value}/badges/`
+            : `https://steamcommunity.com/profiles/${parsedUrl.value}/badges/`
 
-        // --- Source 2: Steam XML games endpoint ---
-        if (allGames.length === 0) {
-          send({
-            type: 'status',
-            message: 'Steam XML\'den oyunlar çekiliyor...',
-          })
+        let cardEligibleGames: { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] = []
 
-          try {
-            const xmlUrl = `https://steamcommunity.com/profiles/${profileInfo.steamId}/games/?xml=1`
-            const xmlHtml = await fetchPageHtml(xmlUrl)
+        try {
+          const firstPageHtml = await fetchPageHtml(badgesUrl)
+          const firstPageGames = parseBadgesPage(firstPageHtml)
+          const maxPages = parseBadgesPageCount(firstPageHtml)
 
-            const xmlGames = parseSteamXMLGames(xmlHtml)
-            if (xmlGames.length > 0) {
-              allGames = xmlGames.map(g => ({
-                appId: g.appId,
-                gameName: g.gameName,
-                hasCardDrops: g.playtime > 0,
-              }))
-              scanMethod = 'steam_xml'
-              send({
-                type: 'status',
-                message: `Steam XML'den ${allGames.length} oyun bulundu.`,
-              })
-            }
-          } catch (err) {
-            console.error('Steam XML fetch failed:', err)
-          }
-        }
+          cardEligibleGames = [...firstPageGames]
 
-        // --- Source 3: Badges Page with Extended Pagination ---
-        if (allGames.length === 0) {
-          send({
-            type: 'status',
-            message: 'Badges sayfasından oyunlar çekiliyor...',
-          })
-          scanMethod = 'badges'
-
-          const badgesUrl =
-            parsedUrl.type === 'id'
-              ? `https://steamcommunity.com/id/${parsedUrl.value}/badges/`
-              : `https://steamcommunity.com/profiles/${parsedUrl.value}/badges/`
-
-          try {
-            const firstPageHtml = await fetchPageHtml(badgesUrl)
-            const firstPageGames = parseBadgesPage(firstPageHtml)
-            const detectedPages = parseBadgesPageCount(firstPageHtml)
-
-            allGames = [...firstPageGames]
-
-            const maxPages = Math.max(detectedPages, 20)
-
+          if (maxPages > 1) {
             send({
               type: 'status',
-              message: `Badges sayfası 1/${maxPages} — ${allGames.length} oyun bulundu...`,
+              message: `Badges sayfası 1/${maxPages} taranıyor... (${cardEligibleGames.length} oyun)`,
             })
 
-            let consecutiveEmptyPages = 0
             for (let page = 2; page <= maxPages; page++) {
               try {
                 const pageHtml = await fetchPageHtml(`${badgesUrl}?p=${page}`)
                 const moreGames = parseBadgesPage(pageHtml)
-                const newGames = moreGames.filter(
-                  g => !allGames.some(existing => existing.appId === g.appId)
-                )
+                if (moreGames.length === 0) break
 
-                if (newGames.length === 0) {
-                  consecutiveEmptyPages++
-                  if (consecutiveEmptyPages >= 2) break
-                } else {
-                  consecutiveEmptyPages = 0
-                  allGames.push(...newGames)
+                for (const g of moreGames) {
+                  if (!cardEligibleGames.some(existing => existing.appId === g.appId)) {
+                    cardEligibleGames.push(g)
+                  }
                 }
 
                 send({
                   type: 'status',
-                  message: `Badges sayfası ${page}/${maxPages} — ${allGames.length} oyun bulundu...`,
+                  message: `Badges sayfası ${page}/${maxPages} taranıyor... (${cardEligibleGames.length} oyun)`,
                 })
               } catch {
                 break
               }
             }
-
-            if (allGames.length > 0) {
-              send({
-                type: 'status',
-                message: `Badges sayfasından ${allGames.length} kartlı oyun bulundu.`,
-              })
-            }
-          } catch (err) {
-            console.error('Badges page fetch failed:', err)
           }
+        } catch (err) {
+          console.error('Badges scan failed:', err)
+        }
+
+        // --- Final Merge ---
+        if (apiOwnedGames.length > 0) {
+          // If we have API data, we use all games that have cards detected in badges
+          // OR if badges failed, we use all API games with playtime
+          if (cardEligibleGames.length > 0) {
+            allGames = cardEligibleGames.map(cg => {
+              const apiGame = apiOwnedGames.find(ag => ag.appId === cg.appId)
+              return {
+                appId: cg.appId,
+                gameName: apiGame ? apiGame.gameName : cg.gameName,
+                hasCardDrops: cg.hasCardDrops,
+                cardDropsRemaining: cg.cardDropsRemaining
+              }
+            })
+            scanMethod = 'web_api_plus_badges'
+          } else {
+            allGames = apiOwnedGames.map(g => ({
+              appId: g.appId,
+              gameName: g.gameName,
+              hasCardDrops: g.playtime > 0
+            }))
+            scanMethod = 'web_api_only'
+          }
+        } else {
+          // No API key, use badges only
+          allGames = cardEligibleGames
+          scanMethod = 'badges_only'
+        }
+
+        // Final fallback if still empty
+        if (allGames.length === 0) {
+          try {
+            send({ type: 'status', message: 'Diğer kaynaklar deneniyor (Games Page)...' })
+            const profileGames = await fetchGamesFromSteamAPI(profileInfo.steamId)
+            if (profileGames.length > 0) {
+              allGames = profileGames.map(g => ({
+                appId: g.appId,
+                gameName: g.gameName,
+                hasCardDrops: g.playtime > 0
+              }))
+              scanMethod = 'games_page'
+            }
+          } catch { }
+        }
+
+        if (allGames.length === 0) {
+          try {
+            send({ type: 'status', message: 'Diğer kaynaklar deneniyor (XML)...' })
+            const xmlUrl = `https://steamcommunity.com/profiles/${profileInfo.steamId}/games/?xml=1`
+            const xmlHtml = await fetchPageHtml(xmlUrl)
+            const xmlGames = parseSteamXMLGames(xmlHtml)
+            if (xmlGames.length > 0) {
+              allGames = xmlGames.map(g => ({
+                appId: g.appId,
+                gameName: g.gameName,
+                hasCardDrops: g.playtime > 0
+              }))
+              scanMethod = 'steam_xml'
+            }
+          } catch { }
         }
 
         if (allGames.length === 0) {
@@ -682,6 +718,11 @@ export async function POST(request: NextRequest) {
         }
 
         // ===== Step 3: Fetch card prices for all games (sequential with adaptive delay) =====
+        send({
+          type: 'status',
+          message: `${allGames.length} kartlı oyun için fiyatlar alınıyor...`,
+        })
+
         send({
           type: 'progress',
           current: 0,
