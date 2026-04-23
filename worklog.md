@@ -85,3 +85,38 @@ Stage Summary:
 - Backend filters out all foil cards before returning data
 - Frontend simplified to single card list per game (no foil/normal split)
 - Sorting and pricing based entirely on normal card values
+
+---
+Task ID: 4
+Agent: Main
+Task: Add card drop limits, droppable card values, and foil cards as optional info
+
+Work Log:
+- Updated GameCardInfo type: split cards into normalCards + foilCards arrays, added cardDropsTotal, droppableCardsValue, totalNormalCardsValue, totalFoilCards
+- Updated fetchCardPrices to return both normal AND foil cards (previously only returned normal)
+- Implemented card drop calculation: cardDropsTotal = ceil(normalCards.length / 2) — Steam's rule
+- Implemented droppableCardsValue: sum of top cardDropsTotal normal cards sorted by price desc
+- Updated badges page parser to extract card drops remaining count ("X card drops remain")
+- Updated allGames type to include cardDropsRemaining field from badges
+- Updated batch processing to separate normal and foil cards, calculate all new fields
+- Rewrote frontend page.tsx with new features:
+  - "X kart düşebilir" badge per game showing drop limit
+  - "normal + foil" card count display
+  - Primary sort changed to droppableCardsValue (most useful metric)
+  - Expanded view now shows 3 sections:
+    1. "Düşebilecek Kartlar" (green highlight) — top cardDropsTotal normal cards with prices
+    2. "Diğer Normal Kartlar" (dimmed) — remaining normal cards that don't drop (trade only)
+    3. "Foil Kartlar" (yellow highlight) — all foil cards, marked "toplama dahil değil"
+  - Stats grid now 4 columns: Kartlı Oyun, Düşebilir Değer, Tüm Normal Top., Toplam Düşecek
+  - Added new sort options: Düşebilir, En Yüksek, Toplam, Düşecek
+  - Foil card values are displayed but NOT included in any totals
+- Added Layers and Sparkles icons back to imports
+- Empty state feature highlights updated: Güncel Fiyatlar, Düşecek Kartlar, Akıllı Sıralama, Foil Kartlar
+- Footer updated to note "Foil kartlar toplama dahil değildir"
+
+Stage Summary:
+- App now shows card drop limits per game (e.g., "5 kart düşebilir")
+- Droppable card value calculated (top N normal cards by price)
+- Foil cards shown as optional info below normal cards, NOT included in totals
+- Cards in expanded view split into: droppable (green), remaining normal (dimmed), foil (yellow)
+- Stats show droppable value, total normal value, and total card drops across all games

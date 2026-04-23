@@ -15,12 +15,15 @@ interface GameCardInfo {
   appId: number
   gameName: string
   gameIconUrl: string
-  cards: CardInfo[]
+  normalCards: CardInfo[]
+  foilCards: CardInfo[]
   highestCardPrice: number
   highestCardName: string
-  highestCardIsFoil: boolean
-  totalCardsValue: number
-  totalCards: number
+  totalNormalCardsValue: number
+  totalNormalCards: number
+  totalFoilCards: number
+  cardDropsTotal: number       // How many cards can drop (ceil of normalCards / 2)
+  droppableCardsValue: number  // Value of the top cardDropsTotal normal cards
   hasCardDrops: boolean
 }
 
@@ -90,8 +93,8 @@ function parseProfileInfo(html: string): ProfileInfo | null {
 // ===== Helper: Parse badges page for games with trading cards =====
 function parseBadgesPage(
   html: string
-): { appId: number; gameName: string; hasCardDrops: boolean }[] {
-  const games: { appId: number; gameName: string; hasCardDrops: boolean }[] = []
+): { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] {
+  const games: { appId: number; gameName: string; hasCardDrops: boolean; cardDropsRemaining: number }[] = []
   const gamecardPattern =
     /gamecards\/(\d+)\/"[^>]*>[\s\S]*?<div class="badge_title"[^>]*>\s*([\s\S]*?)\s*(&nbsp;|<\/div>)/g
 
@@ -104,9 +107,13 @@ function parseBadgesPage(
       const rowStart = Math.max(0, match.index - 2000)
       const rowEnd = Math.min(html.length, match.index + 3000)
       const rowContext = html.substring(rowStart, rowEnd)
-      const hasCardDrops = /card\s+drops?\s+remain/i.test(rowContext)
 
-      games.push({ appId, gameName, hasCardDrops })
+      // Parse "X card drops remaining" or "X card drop remaining"
+      const dropsMatch = rowContext.match(/(\d+)\s+card\s+drops?\s+remain/i)
+      const cardDropsRemaining = dropsMatch ? parseInt(dropsMatch[1]) : 0
+      const hasCardDrops = cardDropsRemaining > 0
+
+      games.push({ appId, gameName, hasCardDrops, cardDropsRemaining })
     }
   }
 
@@ -316,16 +323,16 @@ async function fetchOwnedGamesViaAPI(
   }
 }
 
-// ===== Helper: Fetch card prices from Steam Market API (NORMAL CARDS ONLY — no foil) =====
+// ===== Helper: Fetch card prices from Steam Market API (returns both normal AND foil) =====
 async function fetchCardPrices(
   appId: number,
   gameName: string
-): Promise<CardInfo[]> {
-  const cards: CardInfo[] = []
+): Promise<{ normalCards: CardInfo[]; foilCards: CardInfo[] }> {
+  const normalCards: CardInfo[] = []
+  const foilCards: CardInfo[] = []
 
   try {
-    // Fetch only normal trading cards (tag_item_class_2 = trading card)
-    // We'll filter out foil cards from the results
+    // Fetch trading cards (tag_item_class_2 = trading card, includes both normal & foil)
     const marketUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
 
     const response = await fetch(marketUrl, {
@@ -342,7 +349,13 @@ async function fetchCardPrices(
       const results = data.results || []
       const totalCount = data.total_count || 0
 
-      for (const item of results) {
+      const processItem = (item: {
+        hash_name?: string
+        name?: string
+        sell_price?: number
+        sell_price_text?: string
+        asset_description?: { icon_url?: string; icon_url_large?: string }
+      }) => {
         const hashName: string = item.hash_name || ''
         const name: string = item.name || ''
         const sellPrice: number = item.sell_price || 0
@@ -356,9 +369,6 @@ async function fetchCardPrices(
           name.includes('(Foil)') ||
           name.includes('Foil Trading Card')
 
-        // Skip foil cards — only return normal cards
-        if (isFoil) continue
-
         let imageUrl = ''
         if (iconUrlLarge) {
           imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrlLarge}/62fx62f`
@@ -366,20 +376,30 @@ async function fetchCardPrices(
           imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrl}/62fx62f`
         }
 
+        const card: CardInfo = {
+          name,
+          price: sellPrice / 100,
+          priceText: sellPriceText,
+          isFoil,
+          imageUrl,
+          hashName,
+        }
+
         if (name && sellPrice > 0) {
-          cards.push({
-            name,
-            price: sellPrice / 100,
-            priceText: sellPriceText,
-            isFoil: false,
-            imageUrl,
-            hashName,
-          })
+          if (isFoil) {
+            foilCards.push(card)
+          } else {
+            normalCards.push(card)
+          }
         }
       }
 
-      // If there are more results than we fetched, paginate to get all normal cards
-      if (totalCount > 100 && cards.length >= 100) {
+      for (const item of results) {
+        processItem(item)
+      }
+
+      // If there are more results than we fetched, paginate
+      if (totalCount > 100) {
         const secondPageUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=100&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
         const secondResponse = await fetch(secondPageUrl, {
           headers: {
@@ -393,35 +413,7 @@ async function fetchCardPrices(
           const secondData = await secondResponse.json()
           const secondResults = secondData.results || []
           for (const item of secondResults) {
-            const hashName: string = item.hash_name || ''
-            const name: string = item.name || ''
-            const sellPrice: number = item.sell_price || 0
-            const sellPriceText: string = item.sell_price_text || ''
-            const assetDesc = item.asset_description || {}
-            const iconUrl = assetDesc.icon_url || ''
-            const iconUrlLarge = assetDesc.icon_url_large || ''
-            const isFoil =
-              hashName.includes('(Foil)') ||
-              hashName.includes('Foil Trading Card') ||
-              name.includes('(Foil)') ||
-              name.includes('Foil Trading Card')
-            if (isFoil) continue
-            let imageUrl = ''
-            if (iconUrlLarge) {
-              imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrlLarge}/62fx62f`
-            } else if (iconUrl) {
-              imageUrl = `https://community.akamai.steamstatic.com/economy/image/${iconUrl}/62fx62f`
-            }
-            if (name && sellPrice > 0) {
-              cards.push({
-                name,
-                price: sellPrice / 100,
-                priceText: sellPriceText,
-                isFoil: false,
-                imageUrl,
-                hashName,
-              })
-            }
+            processItem(item)
           }
         }
       }
@@ -430,8 +422,10 @@ async function fetchCardPrices(
     console.error(`Error fetching card prices for ${gameName} (${appId}):`, err)
   }
 
-  cards.sort((a, b) => b.price - a.price)
-  return cards
+  // Sort both by price descending
+  normalCards.sort((a, b) => b.price - a.price)
+  foilCards.sort((a, b) => b.price - a.price)
+  return { normalCards, foilCards }
 }
 
 // ===== Main POST Handler with SSE Streaming =====
@@ -500,6 +494,7 @@ export async function POST(request: NextRequest) {
           appId: number
           gameName: string
           hasCardDrops?: boolean
+          cardDropsRemaining?: number
         }[] = []
         let scanMethod = 'unknown'
 
@@ -742,26 +737,35 @@ export async function POST(request: NextRequest) {
 
           const batchResults = await Promise.all(
             batch.map(async game => {
-              const cards = await fetchCardPrices(game.appId, game.gameName)
-              // All cards returned are normal (non-foil) — filtered in fetchCardPrices
-              if (cards.length === 0) return null
+              const { normalCards, foilCards } = await fetchCardPrices(game.appId, game.gameName)
+              if (normalCards.length === 0) return null
 
-              const highestCard = cards[0] // Already sorted by price desc
-              const totalCardsValue = cards.reduce(
+              const highestCard = normalCards[0] // Already sorted by price desc
+              const totalNormalCardsValue = normalCards.reduce(
                 (sum, c) => sum + c.price,
                 0
               )
+
+              // Card drops = ceil(total normal cards / 2) — Steam's rule
+              const cardDropsTotal = Math.ceil(normalCards.length / 2)
+              // Droppable value = sum of top cardDropsTotal normal cards (sorted desc already)
+              const droppableCardsValue = normalCards
+                .slice(0, cardDropsTotal)
+                .reduce((sum, c) => sum + c.price, 0)
 
               return {
                 appId: game.appId,
                 gameName: game.gameName,
                 gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
-                cards,
+                normalCards,
+                foilCards,
                 highestCardPrice: highestCard.price,
                 highestCardName: highestCard.name,
-                highestCardIsFoil: false, // All cards are normal (non-foil)
-                totalCardsValue,
-                totalCards: cards.length,
+                totalNormalCardsValue,
+                totalNormalCards: normalCards.length,
+                totalFoilCards: foilCards.length,
+                cardDropsTotal,
+                droppableCardsValue,
                 hasCardDrops: game.hasCardDrops ?? false,
               } as GameCardInfo
             })
