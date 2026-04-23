@@ -402,7 +402,7 @@ export default function Home() {
       const response = await fetch('/api/steam/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim(), apiKey: apiKey.trim() || undefined, lang, excludeIds }),
+        body: JSON.stringify({ url: url.trim(), apiKey: apiKey.trim() || undefined, lang, excludeIds, limit: 100 }),
         signal: abortController.signal,
       })
 
@@ -703,8 +703,8 @@ export default function Home() {
             <button
               onClick={() => setLang('tr')}
               className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${lang === 'tr'
-                  ? 'bg-[#66c0f4]/20 text-[#66c0f4] border border-[#66c0f4]/30'
-                  : 'text-[#8f98a0]/60 hover:text-[#8f98a0] hover:bg-[#2a475e]/30'
+                ? 'bg-[#66c0f4]/20 text-[#66c0f4] border border-[#66c0f4]/30'
+                : 'text-[#8f98a0]/60 hover:text-[#8f98a0] hover:bg-[#2a475e]/30'
                 }`}
             >
               <Globe className="w-3 h-3" />
@@ -713,8 +713,8 @@ export default function Home() {
             <button
               onClick={() => setLang('en')}
               className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${lang === 'en'
-                  ? 'bg-[#66c0f4]/20 text-[#66c0f4] border border-[#66c0f4]/30'
-                  : 'text-[#8f98a0]/60 hover:text-[#8f98a0] hover:bg-[#2a475e]/30'
+                ? 'bg-[#66c0f4]/20 text-[#66c0f4] border border-[#66c0f4]/30'
+                : 'text-[#8f98a0]/60 hover:text-[#8f98a0] hover:bg-[#2a475e]/30'
                 }`}
             >
               <Globe className="w-3 h-3" />
@@ -1052,12 +1052,19 @@ export default function Home() {
                     )}
 
                     {!loading && progress && progress.current < progress.total && (
-                      <div className="py-6 flex flex-col items-center gap-3 bg-[#66c0f4]/5 rounded-lg border border-[#66c0f4]/10 mt-2">
-                        <div className="text-xs text-[#8f98a0] text-center px-4">
-                          {t('scanInterrupted')} ({progress.current}/{progress.total})
+                      <div className="py-8 flex flex-col items-center gap-4 bg-gradient-to-b from-[#66c0f4]/10 to-transparent rounded-lg border border-[#66c0f4]/20 mt-4 px-6 text-center">
+                        <div className="w-12 h-12 rounded-full bg-[#66c0f4]/20 flex items-center justify-center animate-pulse">
+                          <Zap className="w-6 h-6 text-[#66c0f4]" />
                         </div>
-                        <Button onClick={() => analyzeProfile(true)} className="bg-[#66c0f4] hover:bg-[#4fa3d6] text-[#1b2838] font-bold">
-                          <RefreshCw className="w-4 h-4 mr-2" />
+                        <div className="space-y-1">
+                          <h4 className="text-sm font-bold text-[#c7d5e0]">100 Oyunluk Paket Tamamlandı</h4>
+                          <p className="text-xs text-[#8f98a0]">
+                            Steam limitlerine takılmamak için taramaya kısa bir ara verdik.
+                            Devam ederek sonraki paketleri tarayabilirsin. ({progress.current}/{progress.total})
+                          </p>
+                        </div>
+                        <Button onClick={() => analyzeProfile(true)} size="lg" className="bg-[#66c0f4] hover:bg-[#4fa3d6] text-[#1b2838] font-bold px-8 shadow-lg shadow-[#66c0f4]/20 group">
+                          <RefreshCw className="w-4 h-4 mr-2 group-hover:rotate-180 transition-transform duration-500" />
                           {t('fetchRemaining')}
                         </Button>
                       </div>
@@ -1280,8 +1287,8 @@ export default function Home() {
         <button
           onClick={() => setShowSupport(prev => !prev)}
           className={`w-12 h-12 rounded-full shadow-lg shadow-black/30 flex items-center justify-center transition-all duration-200 ${showSupport
-              ? 'bg-[#2a475e] hover:bg-[#2a475e]/80 text-[#8f98a0] rotate-0'
-              : 'bg-gradient-to-br from-pink-500 to-rose-600 hover:from-pink-400 hover:to-rose-500 text-white hover:scale-105 active:scale-95'
+            ? 'bg-[#2a475e] hover:bg-[#2a475e]/80 text-[#8f98a0] rotate-0'
+            : 'bg-gradient-to-br from-pink-500 to-rose-600 hover:from-pink-400 hover:to-rose-500 text-white hover:scale-105 active:scale-95'
             }`}
         >
           {showSupport ? (

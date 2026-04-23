@@ -167,7 +167,7 @@ async function fetchCardPrices(appId: number, gameName: string) {
 // ===== Main POST Handler =====
 export async function POST(request: NextRequest) {
   try {
-    const { url, apiKey, excludeIds = [] } = await request.json()
+    const { url, apiKey, excludeIds = [], limit = 100 } = await request.json()
     const parsed = parseSteamUrl(url)
     if (!parsed) return new Response(JSON.stringify({ error: 'invalid url' }), { status: 400 })
 
@@ -229,7 +229,12 @@ export async function POST(request: NextRequest) {
           }
 
           const gameCards: any[] = []
+          let stopReason = 'complete'
           for (let i = 0; i < candidates.length; i++) {
+            if (i >= limit) {
+              stopReason = 'limit_reached'
+              break
+            }
             const game = candidates[i]
             if (i > 0) await new Promise(r => setTimeout(r, 1300))
 
@@ -251,7 +256,7 @@ export async function POST(request: NextRequest) {
           }
 
           gameCards.sort((a, b) => b.droppableCardsValue - a.droppableCardsValue)
-          send({ type: 'complete', data: { profile: pInfo, games: gameCards } })
+          send({ type: 'complete', data: { profile: pInfo, games: gameCards, stopReason, hasMore: candidates.length > limit } })
           controller.close()
         } catch (err) { console.error(err); send({ type: 'error', message: 'Hata oluştu. Profilinizin gizli olup olmadığını kontrol edin.' }); controller.close() }
       }
