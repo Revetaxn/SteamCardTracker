@@ -63,18 +63,63 @@ function cleanGameName(raw: string): string {
     .trim()
 }
 
+// ===== Helper: Fetch with retry (exponential backoff, handles 429 & 5xx) =====
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit & { signal?: AbortSignal } = {},
+  maxRetries = 3,
+  baseDelay = 1500
+): Promise<Response> {
+  let lastError: Error | null = null
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: options.signal || AbortSignal.timeout(20000),
+      })
+
+      // On 429 (rate limit) or 5xx, retry with backoff
+      if (response.status === 429 || response.status >= 500) {
+        if (attempt < maxRetries) {
+          const retryAfter = response.headers.get('Retry-After')
+          let delay = baseDelay * Math.pow(2, attempt)
+          if (retryAfter) {
+            const retrySeconds = parseInt(retryAfter)
+            if (!isNaN(retrySeconds)) {
+              delay = Math.max(delay, retrySeconds * 1000)
+            }
+          }
+          console.log(`[Retry] ${response.status} for ${url.substring(0, 80)}... waiting ${delay}ms (attempt ${attempt + 1}/${maxRetries})`)
+          await new Promise(resolve => setTimeout(resolve, delay))
+          continue
+        }
+      }
+
+      return response
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+      if (attempt < maxRetries) {
+        const delay = baseDelay * Math.pow(2, attempt)
+        console.log(`[Retry] Network error for ${url.substring(0, 80)}... waiting ${delay}ms (attempt ${attempt + 1}/${maxRetries}): ${lastError.message}`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+  }
+  throw lastError || new Error(`Failed to fetch ${url} after ${maxRetries} retries`)
+}
+
 // ===== Helper: Fetch game name from Steam Store API =====
 async function fetchGameName(appId: number): Promise<string> {
   try {
     const url = `https://store.steampowered.com/api/appdetails?appids=${appId}&cc=us`
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'application/json',
       },
-      signal: AbortSignal.timeout(10000),
-    })
+      signal: AbortSignal.timeout(15000),
+    }, 2, 1000)
 
     if (response.ok) {
       const data = await response.json()
@@ -97,14 +142,14 @@ async function fetchCardPrices(appId: number, gameName: string): Promise<{ norma
   try {
     const marketUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
 
-    const response = await fetch(marketUrl, {
+    const response = await fetchWithRetry(marketUrl, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'application/json',
       },
       signal: AbortSignal.timeout(15000),
-    })
+    }, 2, 1000)
 
     if (response.ok) {
       const data = await response.json()
@@ -162,20 +207,25 @@ async function fetchCardPrices(appId: number, gameName: string): Promise<{ norma
 
       // Pagination if needed
       if (totalCount > 100) {
+        await new Promise(resolve => setTimeout(resolve, 500))
         const secondPageUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=100&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
-        const secondResponse = await fetch(secondPageUrl, {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            Accept: 'application/json',
-          },
-          signal: AbortSignal.timeout(15000),
-        })
-        if (secondResponse.ok) {
-          const secondData = await secondResponse.json()
-          for (const item of secondData.results || []) {
-            processItem(item)
+        try {
+          const secondResponse = await fetchWithRetry(secondPageUrl, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              Accept: 'application/json',
+            },
+            signal: AbortSignal.timeout(15000),
+          }, 2, 1000)
+          if (secondResponse.ok) {
+            const secondData = await secondResponse.json()
+            for (const item of secondData.results || []) {
+              processItem(item)
+            }
           }
+        } catch (err) {
+          console.warn(`Second page fetch failed for ${gameName} (${appId}):`, err)
         }
       }
     }
