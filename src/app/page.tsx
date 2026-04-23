@@ -173,6 +173,8 @@ export default function SteamCardTracker() {
             })
             if (data.type === 'game') {
               setGames(prev => {
+                // Deduplicate incoming games
+                if (prev.some(g => g.appId === data.data.appId)) return prev
                 const updated = [...prev, data.data]
                 return updated.sort((a, b) => (b.droppableCardsValue + b.foilCardsValue) - (a.droppableCardsValue + a.foilCardsValue))
               })
