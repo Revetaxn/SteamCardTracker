@@ -120,3 +120,34 @@ Stage Summary:
 - Foil cards shown as optional info below normal cards, NOT included in totals
 - Cards in expanded view split into: droppable (green), remaining normal (dimmed), foil (yellow)
 - Stats show droppable value, total normal value, and total card drops across all games
+
+---
+Task ID: 5
+Agent: Main
+Task: Add Turkish/English language support and specific game card lookup feature
+
+Work Log:
+- Added comprehensive i18n translation dictionary with 70+ keys for both Turkish (tr) and English (en)
+- Added language toggle in header (TR/EN buttons with Globe icon, active state highlight)
+- All UI text now uses t() translation function — no hardcoded Turkish strings remain
+- Created new backend API endpoint: /api/steam/game-cards (POST)
+  - Accepts Steam store URL, App ID, SteamDB URL, or community URL
+  - Fetches game name from Steam Store API (appdetails endpoint)
+  - Fetches all trading card prices from Steam Market API
+  - Returns normal + foil cards with individual prices, droppable value, totals
+- Added tab navigation (Tabs component) for Profile Analysis vs Game Cards modes
+- "Profile Analysis" tab: same functionality as before with i18n support
+- "Game Cards" tab: new feature for single-game card lookup
+  - Input accepts Steam store URLs, App IDs, or any Steam game link
+  - Shows complete card breakdown: droppable cards, remaining normal, foil
+  - Stats grid: Normal Cards count, Droppable Value, Total Value, Drop Count, Foil Cards
+  - Loading skeleton while fetching
+  - Empty state with feature highlights and example URL formats
+- Added Package icon for game lookup tab
+- Lint passes clean, dev server compiles successfully
+
+Stage Summary:
+- Full bilingual support (Turkish + English) with toggle in header
+- New "Oyun Kartları / Game Cards" tab for single-game card lookup
+- Backend: /api/steam/game-cards endpoint for specific game card fetching
+- All existing features preserved and translated
