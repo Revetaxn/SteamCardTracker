@@ -1,5 +1,4 @@
 import { NextRequest } from 'next/server'
-import ZAI from 'z-ai-web-dev-sdk'
 
 // ===== Types =====
 interface CardInfo {
@@ -22,9 +21,9 @@ interface GameCardInfo {
   totalNormalCardsValue: number
   totalNormalCards: number
   totalFoilCards: number
-  cardDropsTotal: number           // How many cards will drop (ceil of normalCards / 2)
-  droppableCardsValue: number      // Expected value: cardDropsTotal × avg(normalCard prices)
-  avgCardPrice: number             // Average price of a normal card
+  cardDropsTotal: number
+  droppableCardsValue: number
+  avgCardPrice: number
   hasCardDrops: boolean
 }
 
@@ -34,6 +33,27 @@ interface ProfileInfo {
   avatarUrl: string
   profileUrl: string
   gameCount: number
+}
+
+// ===== Helper: Fetch page HTML using direct HTTP request =====
+async function fetchPageHtml(url: string, timeout = 15000): Promise<string> {
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Accept-Encoding': 'gzip, deflate, br',
+      Connection: 'keep-alive',
+    },
+    signal: AbortSignal.timeout(timeout),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} for ${url}`)
+  }
+
+  return await response.text()
 }
 
 // ===== Helper: Parse Steam URL =====
@@ -60,6 +80,29 @@ function cleanGameName(raw: string): string {
     .replace(/View details/gi, '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+// ===== Helper: Resolve vanity URL to SteamID64 =====
+async function resolveVanityUrl(vanityName: string): Promise<string | null> {
+  try {
+    const url = `https://steamcommunity.com/id/${vanityName}/`
+    const html = await fetchPageHtml(url)
+
+    // Try to extract steamID from profile page data
+    const profileDataMatch = html.match(/g_rgProfileData\s*=\s*({[^}]+})/)
+    if (profileDataMatch) {
+      const profileData = JSON.parse(profileDataMatch[1])
+      return profileData.steamid || null
+    }
+
+    // Try steamid in meta tags or other patterns
+    const steamIdMatch = html.match(/steamid":"(\d{17})"/) || html.match(/"steamid":"(\d+)"/)
+    if (steamIdMatch) return steamIdMatch[1]
+
+    return null
+  } catch {
+    return null
+  }
 }
 
 // ===== Helper: Parse profile info from Steam profile page =====
@@ -139,69 +182,12 @@ function parseBadgesPageCount(html: string): number {
   return maxPage
 }
 
-// ===== Helper: Parse SteamDB calculator page for all games =====
-function parseSteamDBGames(html: string): { appId: number; gameName: string }[] {
-  const games: { appId: number; gameName: string }[] = []
-  const seen = new Set<number>()
-
-  // Check if Cloudflare blocked us
-  if (
-    html.includes('challenge-platform') ||
-    html.includes('cf-browser-verification') ||
-    html.includes('Just a moment') ||
-    html.includes('Enable JavaScript and cookies to continue')
-  ) {
-    console.log('SteamDB: Cloudflare challenge detected')
-    return []
-  }
-
-  // Pattern 1: SteamDB app links — href="/app/APPID/"
-  const appLinkPattern = /href="\/app\/(\d+)\/?"[^>]*>([\s\S]*?)<\/a>/g
-  let match
-  while ((match = appLinkPattern.exec(html)) !== null) {
-    const appId = parseInt(match[1])
-    const rawName = match[2].replace(/<[^>]+>/g, '').trim()
-    const gameName = cleanGameName(rawName)
-    if (appId && gameName && !seen.has(appId) && gameName.length > 1 && !gameName.includes('SteamDB')) {
-      seen.add(appId)
-      games.push({ appId, gameName })
-    }
-  }
-
-  // Pattern 2: data-appid attributes
-  if (games.length === 0) {
-    const dataAppIdPattern = /data-appid="(\d+)"/g
-    while ((match = dataAppIdPattern.exec(html)) !== null) {
-      const appId = parseInt(match[1])
-      if (appId && !seen.has(appId)) {
-        seen.add(appId)
-        games.push({ appId, gameName: `Game ${appId}` })
-      }
-    }
-  }
-
-  // Pattern 3: store.steampowered.com links
-  if (games.length === 0) {
-    const storeLinkPattern = /store\.steampowered\.com\/app\/(\d+)/g
-    while ((match = storeLinkPattern.exec(html)) !== null) {
-      const appId = parseInt(match[1])
-      if (appId && !seen.has(appId)) {
-        seen.add(appId)
-        games.push({ appId, gameName: `Game ${appId}` })
-      }
-    }
-  }
-
-  return games
-}
-
 // ===== Helper: Parse Steam games page (rgGames JS variable) =====
 function parseSteamGamesPage(
   html: string
 ): { appId: number; gameName: string; playtime: number }[] {
   const games: { appId: number; gameName: string; playtime: number }[] = []
 
-  // Try to find rgGames JavaScript variable
   const rgGamesMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
   if (rgGamesMatch) {
     try {
@@ -229,15 +215,12 @@ function parseSteamXMLGames(
 ): { appId: number; gameName: string; playtime: number }[] {
   const games: { appId: number; gameName: string; playtime: number }[] = []
 
-  // Try to parse XML format
-  // <appID>12345</appID><name>Game Name</name>
   const gamePattern = /<appID>(\d+)<\/appID>[\s\S]*?<name><!\[CDATA\[([^\]]*)\]\]><\/name>/g
   let match
   while ((match = gamePattern.exec(html)) !== null) {
     const appId = parseInt(match[1])
     const gameName = cleanGameName(match[2])
     if (appId && gameName) {
-      // Try to find playtime in the same block
       const blockEnd = html.indexOf('</game>', match.index)
       const block = blockEnd > 0 ? html.substring(match.index, blockEnd) : ''
       const hoursMatch = block.match(/<hoursOnRecord>([^<]+)<\/hoursOnRecord>/)
@@ -246,7 +229,6 @@ function parseSteamXMLGames(
     }
   }
 
-  // Fallback: try non-CDATA format
   if (games.length === 0) {
     const simplePattern = /<appID>(\d+)<\/appID>[\s\S]*?<name>([^<]+)<\/name>/g
     while ((match = simplePattern.exec(html)) !== null) {
@@ -261,30 +243,17 @@ function parseSteamXMLGames(
   return games
 }
 
-// ===== Helper: Fetch games directly from Steam API (no key needed for some endpoints) =====
+// ===== Helper: Fetch games directly from Steam API (no key needed) =====
 async function fetchGamesFromSteamAPI(
   steamId: string
 ): Promise<{ appId: number; gameName: string; playtime: number }[]> {
   try {
-    // Try the games page JSON endpoint
     const url = `https://steamcommunity.com/profiles/${steamId}/games/?tab=all`
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-      signal: AbortSignal.timeout(15000),
-    })
+    const html = await fetchPageHtml(url)
 
-    if (!response.ok) return []
-
-    const html = await response.text()
-
-    // Try rgGames JSON
     const jsonGames = parseSteamGamesPage(html)
     if (jsonGames.length > 0) return jsonGames
 
-    // Try XML parsing
     const xmlGames = parseSteamXMLGames(html)
     if (xmlGames.length > 0) return xmlGames
 
@@ -324,7 +293,7 @@ async function fetchOwnedGamesViaAPI(
   }
 }
 
-// ===== Helper: Fetch card prices from Steam Market API (returns both normal AND foil) =====
+// ===== Helper: Fetch card prices from Steam Market API =====
 async function fetchCardPrices(
   appId: number,
   gameName: string
@@ -333,7 +302,6 @@ async function fetchCardPrices(
   const foilCards: CardInfo[] = []
 
   try {
-    // Fetch trading cards (tag_item_class_2 = trading card, includes both normal & foil)
     const marketUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=0&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
 
     const response = await fetch(marketUrl, {
@@ -399,7 +367,7 @@ async function fetchCardPrices(
         processItem(item)
       }
 
-      // If there are more results than we fetched, paginate
+      // Pagination if needed
       if (totalCount > 100) {
         const secondPageUrl = `https://steamcommunity.com/market/search/render/?norender=1&query=&start=100&count=100&search_descriptions=0&sort_column=price&sort_dir=desc&category_753_Game[]=tag_app_${appId}&category_753_item_class[]=tag_item_class_2`
         const secondResponse = await fetch(secondPageUrl, {
@@ -412,8 +380,7 @@ async function fetchCardPrices(
         })
         if (secondResponse.ok) {
           const secondData = await secondResponse.json()
-          const secondResults = secondData.results || []
-          for (const item of secondResults) {
+          for (const item of secondData.results || []) {
             processItem(item)
           }
         }
@@ -423,10 +390,20 @@ async function fetchCardPrices(
     console.error(`Error fetching card prices for ${gameName} (${appId}):`, err)
   }
 
-  // Sort both by price descending
   normalCards.sort((a, b) => b.price - a.price)
   foilCards.sort((a, b) => b.price - a.price)
   return { normalCards, foilCards }
+}
+
+// ===== Helper: Resolve SteamID from vanity URL or profile URL =====
+async function resolveSteamId(parsedUrl: { type: 'id' | 'profiles'; value: string }): Promise<string | null> {
+  if (parsedUrl.type === 'profiles') {
+    return parsedUrl.value
+  }
+
+  // Vanity URL — need to resolve to SteamID64
+  const resolved = await resolveVanityUrl(parsedUrl.value)
+  return resolved
 }
 
 // ===== Main POST Handler with SSE Streaming =====
@@ -465,21 +442,16 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        // ===== Step 1: Fetch profile info =====
+        // ===== Step 1: Fetch profile info using direct HTTP =====
         send({ type: 'status', message: 'Profil bilgileri alınıyor...' })
-
-        const zai = await ZAI.create()
 
         const profilePageUrl =
           parsedUrl.type === 'id'
             ? `https://steamcommunity.com/id/${parsedUrl.value}/`
             : `https://steamcommunity.com/profiles/${parsedUrl.value}/`
 
-        const profileResult = await zai.functions.invoke('page_reader', {
-          url: profilePageUrl,
-        })
-
-        const profileInfo = parseProfileInfo(profileResult.data.html)
+        const profileHtml = await fetchPageHtml(profilePageUrl)
+        const profileInfo = parseProfileInfo(profileHtml)
 
         if (!profileInfo) {
           send({
@@ -519,36 +491,7 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // --- Source 1: SteamDB Calculator ---
-        if (allGames.length === 0) {
-          send({ type: 'status', message: 'SteamDB\'den oyunlar çekiliyor...' })
-
-          try {
-            const steamdbUrl = `https://steamdb.info/calculator/${profileInfo.steamId}/?cc=us&all_games`
-            const steamdbResult = await zai.functions.invoke('page_reader', {
-              url: steamdbUrl,
-            })
-
-            const steamdbGames = parseSteamDBGames(steamdbResult.data.html)
-
-            if (steamdbGames.length > 10) {
-              allGames = steamdbGames
-              scanMethod = 'steamdb'
-              send({
-                type: 'status',
-                message: `SteamDB'den ${allGames.length} oyun bulundu.`,
-              })
-            } else {
-              console.log(
-                `SteamDB returned too few games (${steamdbGames.length}), trying other sources...`
-              )
-            }
-          } catch (err) {
-            console.error('SteamDB fetch failed:', err)
-          }
-        }
-
-        // --- Source 2: Steam Games Page (web-reader) ---
+        // --- Source 1: Steam Games Page (direct fetch) ---
         if (allGames.length === 0) {
           send({
             type: 'status',
@@ -556,16 +499,9 @@ export async function POST(request: NextRequest) {
           })
 
           try {
-            const gamesPageUrl = `https://steamcommunity.com/profiles/${profileInfo.steamId}/games/?tab=all`
-            const gamesPageResult = await zai.functions.invoke('page_reader', {
-              url: gamesPageUrl,
-            })
-
-            const gamesPageHtml = gamesPageResult.data.html
-            const gamesPageGames = parseSteamGamesPage(gamesPageHtml)
-
-            if (gamesPageGames.length > 0) {
-              allGames = gamesPageGames.map(g => ({
+            const apiGames = await fetchGamesFromSteamAPI(profileInfo.steamId)
+            if (apiGames.length > 0) {
+              allGames = apiGames.map(g => ({
                 appId: g.appId,
                 gameName: g.gameName,
                 hasCardDrops: g.playtime > 0,
@@ -577,37 +513,11 @@ export async function POST(request: NextRequest) {
               })
             }
           } catch (err) {
-            console.error('Games page (web-reader) fetch failed:', err)
+            console.error('Games page fetch failed:', err)
           }
         }
 
-        // --- Source 2b: Steam Games direct fetch (bypasses web-reader) ---
-        if (allGames.length === 0) {
-          send({
-            type: 'status',
-            message: 'Steam API\'den oyunlar çekiliyor...',
-          })
-
-          try {
-            const apiGames = await fetchGamesFromSteamAPI(profileInfo.steamId)
-            if (apiGames.length > 0) {
-              allGames = apiGames.map(g => ({
-                appId: g.appId,
-                gameName: g.gameName,
-                hasCardDrops: g.playtime > 0,
-              }))
-              scanMethod = 'steam_api'
-              send({
-                type: 'status',
-                message: `Steam API'den ${allGames.length} oyun bulundu.`,
-              })
-            }
-          } catch (err) {
-            console.error('Steam API fetch failed:', err)
-          }
-        }
-
-        // --- Source 2c: Steam XML games endpoint ---
+        // --- Source 2: Steam XML games endpoint ---
         if (allGames.length === 0) {
           send({
             type: 'status',
@@ -616,11 +526,9 @@ export async function POST(request: NextRequest) {
 
           try {
             const xmlUrl = `https://steamcommunity.com/profiles/${profileInfo.steamId}/games/?xml=1`
-            const xmlResult = await zai.functions.invoke('page_reader', {
-              url: xmlUrl,
-            })
+            const xmlHtml = await fetchPageHtml(xmlUrl)
 
-            const xmlGames = parseSteamXMLGames(xmlResult.data.html)
+            const xmlGames = parseSteamXMLGames(xmlHtml)
             if (xmlGames.length > 0) {
               allGames = xmlGames.map(g => ({
                 appId: g.appId,
@@ -652,16 +560,12 @@ export async function POST(request: NextRequest) {
               : `https://steamcommunity.com/profiles/${parsedUrl.value}/badges/`
 
           try {
-            const firstPageResult = await zai.functions.invoke('page_reader', {
-              url: badgesUrl,
-            })
-            const firstPageHtml = firstPageResult.data.html
+            const firstPageHtml = await fetchPageHtml(badgesUrl)
             const firstPageGames = parseBadgesPage(firstPageHtml)
             const detectedPages = parseBadgesPageCount(firstPageHtml)
 
             allGames = [...firstPageGames]
 
-            // Always try at least 20 pages (detected pages might be wrong due to web-reader)
             const maxPages = Math.max(detectedPages, 20)
 
             send({
@@ -669,21 +573,17 @@ export async function POST(request: NextRequest) {
               message: `Badges sayfası 1/${maxPages} — ${allGames.length} oyun bulundu...`,
             })
 
-            // Fetch remaining pages until no new games found
             let consecutiveEmptyPages = 0
             for (let page = 2; page <= maxPages; page++) {
               try {
-                const pageResult = await zai.functions.invoke('page_reader', {
-                  url: `${badgesUrl}?p=${page}`,
-                })
-                const moreGames = parseBadgesPage(pageResult.data.html)
+                const pageHtml = await fetchPageHtml(`${badgesUrl}?p=${page}`)
+                const moreGames = parseBadgesPage(pageHtml)
                 const newGames = moreGames.filter(
                   g => !allGames.some(existing => existing.appId === g.appId)
                 )
 
                 if (newGames.length === 0) {
                   consecutiveEmptyPages++
-                  // Stop after 2 consecutive empty pages
                   if (consecutiveEmptyPages >= 2) break
                 } else {
                   consecutiveEmptyPages = 0
@@ -720,7 +620,6 @@ export async function POST(request: NextRequest) {
         }
 
         // ===== Step 3: Fetch card prices for all games =====
-        // For badges source, games already have cards. For other sources, we need to check.
         send({
           type: 'progress',
           current: 0,
@@ -731,7 +630,7 @@ export async function POST(request: NextRequest) {
 
         const gameCards: GameCardInfo[] = []
         const batchSize = 10
-        const batchDelay = 400 // ms between batches
+        const batchDelay = 400
 
         for (let i = 0; i < allGames.length; i += batchSize) {
           const batch = allGames.slice(i, i + batchSize)
@@ -741,16 +640,13 @@ export async function POST(request: NextRequest) {
               const { normalCards, foilCards } = await fetchCardPrices(game.appId, game.gameName)
               if (normalCards.length === 0) return null
 
-              const highestCard = normalCards[0] // Already sorted by price desc
+              const highestCard = normalCards[0]
               const totalNormalCardsValue = normalCards.reduce(
                 (sum, c) => sum + c.price,
                 0
               )
 
-              // Card drops = ceil(total normal cards / 2) — Steam's rule
               const cardDropsTotal = Math.ceil(normalCards.length / 2)
-              // All normal cards can drop randomly (duplicates possible)
-              // Expected value = cardDropsTotal × average card price
               const avgCardPrice = totalNormalCardsValue / normalCards.length
               const droppableCardsValue = Math.round(avgCardPrice * cardDropsTotal * 100) / 100
 
@@ -778,7 +674,6 @@ export async function POST(request: NextRequest) {
 
           const processed = Math.min(i + batchSize, allGames.length)
 
-          // Send progress update
           send({
             type: 'progress',
             current: processed,
@@ -787,18 +682,15 @@ export async function POST(request: NextRequest) {
             message: `Kart fiyatları alınıyor... (${processed}/${allGames.length}) — ${gameCards.length} kartlı oyun bulundu`,
           })
 
-          // Send individual game results for real-time display
           for (const gameResult of validResults) {
             send({ type: 'game', data: gameResult })
           }
 
-          // Delay between batches to avoid rate limiting
           if (i + batchSize < allGames.length) {
             await new Promise(resolve => setTimeout(resolve, batchDelay))
           }
         }
 
-        // Sort by highest card price descending
         gameCards.sort((a, b) => b.highestCardPrice - a.highestCardPrice)
 
         // ===== Step 4: Send complete event =====
