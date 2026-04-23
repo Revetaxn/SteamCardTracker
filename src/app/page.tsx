@@ -33,6 +33,7 @@ interface GameResult {
   highestCardPrice: number
   totalNormalCards: number
   droppableCardsValue: number
+  foilCardsValue: number
   hasCardDrops: boolean
 }
 
@@ -173,7 +174,7 @@ export default function SteamCardTracker() {
             if (data.type === 'game') {
               setGames(prev => {
                 const updated = [...prev, data.data]
-                return updated.sort((a, b) => b.droppableCardsValue - a.droppableCardsValue)
+                return updated.sort((a, b) => (b.droppableCardsValue + b.foilCardsValue) - (a.droppableCardsValue + a.foilCardsValue))
               })
             }
             if (data.type === 'complete') {
@@ -191,7 +192,7 @@ export default function SteamCardTracker() {
     }
   }, [url, apiKey, lang, t, games])
 
-  const totalPot = useMemo(() => games.reduce((acc, g) => acc + g.droppableCardsValue, 0), [games])
+  const totalPot = useMemo(() => games.reduce((acc, g) => acc + g.droppableCardsValue + g.foilCardsValue, 0), [games])
 
   return (
     <div className="min-h-screen bg-[#1b2838] text-[#c7d5e0] font-sans selection:bg-[#66c0f4]/30">
@@ -303,18 +304,40 @@ export default function SteamCardTracker() {
               </div>
             )}
 
-            <Card className="bg-[#0d121a]/40 border-dashed border-white/10 hover:border-[#66c0f4]/30 transition-colors cursor-pointer group">
-              <a href="#" className="block p-4">
+            {/* Support Section */}
+            <Card className="bg-[#0d121a]/40 border-dashed border-white/10 overflow-hidden">
+              <div className="p-4 space-y-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center group-hover:bg-[#66c0f4]/20 transition-colors">
-                    <Trophy className="w-5 h-5 text-[#8f98a0] group-hover:text-[#66c0f4]" />
+                  <div className="w-10 h-10 rounded-full bg-[#66c0f4]/10 flex items-center justify-center">
+                    <Trophy className="w-5 h-5 text-[#66c0f4]" />
                   </div>
                   <div>
-                    <h4 className="text-xs font-black text-white uppercase tracking-tight">Support Me</h4>
-                    <p className="text-[10px] text-[#8f98a0]">Buy me a coffee or donate skin.</p>
+                    <h4 className="text-xs font-black text-white uppercase tracking-tight">Support Revetax</h4>
+                    <p className="text-[10px] text-[#8f98a0]">Choose an option below</p>
                   </div>
                 </div>
-              </a>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <a
+                    href="https://store.steampowered.com/wishlist/id/Revetaxn/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors border border-white/5 group"
+                  >
+                    <Trophy className="w-4 h-4 text-[#8f98a0] mb-1 group-hover:text-yellow-500" />
+                    <span className="text-[9px] font-bold text-white uppercase tracking-tighter">Wishlist</span>
+                  </a>
+                  <a
+                    href="https://steamcommunity.com/tradeoffer/new/?partner=75521086&token=4YxxBXfy"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center justify-center p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors border border-white/5 group"
+                  >
+                    <RefreshCw className="w-4 h-4 text-[#8f98a0] mb-1 group-hover:text-[#66c0f4]" />
+                    <span className="text-[9px] font-bold text-white uppercase tracking-tighter">Trade</span>
+                  </a>
+                </div>
+              </div>
             </Card>
           </aside>
 
@@ -365,29 +388,29 @@ export default function SteamCardTracker() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
                           <h3 className="font-bold text-white text-base leading-tight truncate uppercase italic">{game.gameName}</h3>
-                          <a href={`https://steamcommunity.com/market/search?appid=753&q=tag_app_${game.appId}`} target="_blank" rel="noopener noreferrer" className="bg-white/5 hover:bg-white/10 p-2 rounded-lg">
+                          <a href={`https://steamcommunity.com/market/search?q=${encodeURIComponent(game.gameName)}&appid=753`} target="_blank" rel="noopener noreferrer" className="bg-white/5 hover:bg-white/10 p-2 rounded-lg">
                             <ExternalLink className="w-3 h-3 text-[#8f98a0]" />
                           </a>
                         </div>
                         <div className="flex items-center gap-4 mt-2">
                           <div className="flex flex-col">
-                            <span className="text-[9px] font-black uppercase text-[#66c0f4] tracking-tighter italic">{t.maxPrice}</span>
-                            <span className="text-sm font-black text-[#66c0f4]">${game.highestCardPrice.toFixed(2)}</span>
-                          </div>
-                          <div className="w-px h-6 bg-white/5"></div>
-                          <div className="flex flex-col">
-                            <span className="text-[9px] font-black uppercase text-green-400 tracking-tighter italic">{t.potentialProfit}</span>
+                            <span className="text-[9px] font-black uppercase text-green-400 tracking-tighter italic">Normal Drops</span>
                             <span className="text-sm font-black text-green-400">${game.droppableCardsValue.toFixed(2)}</span>
                           </div>
-                          {game.foilCards.length > 0 && (
+                          {game.foilCardsValue > 0 && (
                             <>
                               <div className="w-px h-6 bg-white/5"></div>
                               <div className="flex flex-col">
                                 <span className="text-[9px] font-black uppercase text-yellow-500 tracking-tighter italic">Foil Price</span>
-                                <span className="text-sm font-black text-yellow-500">${Math.max(...game.foilCards.map(c => c.price)).toFixed(2)}</span>
+                                <span className="text-sm font-black text-yellow-500">${game.foilCardsValue.toFixed(2)}</span>
                               </div>
                             </>
                           )}
+                          <div className="w-px h-6 bg-white/5"></div>
+                          <div className="flex flex-col">
+                            <span className="text-[9px] font-black uppercase text-[#66c0f4] tracking-tighter italic">{t.maxPrice}</span>
+                            <span className="text-sm font-black text-[#66c0f4]">${game.highestCardPrice.toFixed(2)}</span>
+                          </div>
                         </div>
                       </div>
 

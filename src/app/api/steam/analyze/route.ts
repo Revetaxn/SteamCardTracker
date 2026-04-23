@@ -247,6 +247,9 @@ export async function POST(request: NextRequest) {
 
             const prices = await getCardPrices(game.appId)
             if (prices && prices.normalCards.length > 0) {
+              const normalVal = (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) * Math.ceil(prices.normalCards.length / 2)
+              const foilVal = prices.foilCards.length > 0 ? (prices.foilCards.reduce((s, c) => s + c.price, 0) / prices.foilCards.length) : 0
+
               const res = {
                 appId: game.appId, gameName: game.gameName,
                 gameIconUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appId}/capsule_231x87.jpg`,
@@ -254,7 +257,8 @@ export async function POST(request: NextRequest) {
                 foilCards: prices.foilCards,
                 highestCardPrice: Math.max(...prices.normalCards.map(c => c.price)),
                 totalNormalCards: prices.normalCards.length,
-                droppableCardsValue: (prices.normalCards.reduce((s, c) => s + c.price, 0) / prices.normalCards.length) * Math.ceil(prices.normalCards.length / 2),
+                droppableCardsValue: normalVal,
+                foilCardsValue: foilVal,
                 hasCardDrops: true
               }
               gameCards.push(res)
