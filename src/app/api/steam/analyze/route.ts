@@ -38,6 +38,7 @@ async function fetchWithRetry(
       if (response.status === 429 || response.status >= 500) {
         if (attempt < maxRetries) {
           let delay = baseDelay * Math.pow(2, attempt)
+          console.log(`[Retry] ${response.status} for ${url.substring(0, 80)}...`)
           await new Promise(resolve => setTimeout(resolve, delay))
           continue
         }
@@ -76,18 +77,29 @@ async function bulkCheckGamesForCards(appIds: number[]) {
     const url = `https://store.steampowered.com/api/appdetails?appids=${batch.join(',')}&filters=categories`
     try {
       const resp = await fetch(url, { signal: AbortSignal.timeout(15000) })
+      if (!resp.ok) {
+        batch.forEach(id => delisted.push(id))
+        continue
+      }
       const data = await resp.json()
       batch.forEach(id => {
         if (data && data[id]) {
           if (data[id].success && data[id].data) {
             const cats = data[id].data.categories || []
             if (cats.some((c: any) => c.id === 29)) confirmed.push(id)
-          } else if (data[id].success === false) {
+            else delisted.push(id) // Might be false negative, keep in delisted
+          } else {
             delisted.push(id)
           }
+        } else {
+          delisted.push(id)
         }
       })
     } catch { batch.forEach(id => delisted.push(id)) }
+  }
+  // If Store API is failing entirely, treat all as delisted to preserve them
+  if (confirmed.length === 0 && delisted.length === 0 && appIds.length > 0) {
+    return { confirmed: [], delisted: appIds }
   }
   return { confirmed, delisted }
 }
@@ -126,28 +138,44 @@ function parseBadgesPage(html: string) {
     if (!appId || seen.has(appId)) continue
     seen.add(appId)
     const context = html.substring(Math.max(0, match.index - 500), match.index + 1000)
-    let gName = context.match(/badge_title"[^>]*>\s*([\s\S]*?)\s*(?:&nbsp;|<\/div>)/i)?.[1] || `Game ${appId}`
+    let gName = context.match(/badge_title"[^>]*>\s*([\s\S]*?)\s*(?:&nbsp;|<\/div>)/i)?.[1]
+      || context.match(/badge_row_type[^>]*>\s*([\s\S]*?)\s*<\/div>/i)?.[1]
+      || `Game ${appId}`
     games.push({ appId, gameName: cleanGameName(gName) })
   }
   return games
 }
 
-async function fetchGamesFromXML(steamId: string) {
+function parseSteamGamesPage(html: string) {
+  const rgMatch = html.match(/rgGames\s*=\s*(\[[\s\S]*?\])\s*;/)
+  if (!rgMatch) return []
   try {
-    const html = await fetchPageHtml(`https://steamcommunity.com/profiles/${steamId}/games?xml=1`)
+    return JSON.parse(rgMatch[1]).map((g: any) => ({ appId: g.appid, gameName: cleanGameName(g.name) }))
+  } catch { return [] }
+}
+
+async function fetchGamesFromXML(baseUrl: string) {
+  try {
+    const xmlUrl = baseUrl.endsWith('/') ? `${baseUrl}games?xml=1` : `${baseUrl}/games?xml=1`
+    const html = await fetchPageHtml(xmlUrl)
     const games: any[] = []
-    const pattern = /<appID>(\d+)<\/appID>[\s\S]*?<name><!\[CDATA\[([^\]]*)\]\]><\/name>/g
+    // Match both CDATA and non-CDATA game names
+    const pattern = /<game>\s*<appID>(\d+)<\/appID>\s*<name>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/name>/gs
     let match
     while ((match = pattern.exec(html)) !== null) {
       games.push({ appId: parseInt(match[1]), gameName: cleanGameName(match[2]) })
     }
     return games
-  } catch { return [] }
+  } catch (e) {
+    console.error(`[XML] Fetch failed: ${e}`)
+    return []
+  }
 }
 
 async function fetchOwnedGamesViaAPI(steamId: string, apiKey: string) {
   const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamId}&include_appinfo=1&format=json`
   const resp = await fetch(url)
+  if (!resp.ok) return []
   const data = await resp.json()
   return (data.response?.games || []).map((g: any) => ({ appId: g.appid, gameName: cleanGameName(g.name) }))
 }
@@ -187,60 +215,73 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder()
     const stream = new ReadableStream({
       async start(controller) {
-        const send = (data: any) => { controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)) }
+        const send = (data: any) => {
+          try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)) } catch { }
+        }
 
         try {
           send({ type: 'status', message: 'Profil bilgileri alınıyor...' })
           const baseUrl = parsed.type === 'id' ? `https://steamcommunity.com/id/${parsed.value}/` : `https://steamcommunity.com/profiles/${parsed.value}/`
-          const pInfo = parseProfileInfo(await fetchPageHtml(baseUrl))
-          if (!pInfo) { send({ type: 'error', message: 'Profil gizli veya hatalı.' }); return controller.close() }
+          const mainHtml = await fetchPageHtml(baseUrl)
+          const pInfo = parseProfileInfo(mainHtml)
 
-          // Discovery Phase
-          send({ type: 'status', message: 'Kütüphane listesi alınıyor...' })
-          const [apiG, xmlG] = await Promise.all([
+          if (!pInfo) {
+            send({ type: 'error', message: 'Profil bilgileri okunamadı. Profilinizin gizli olup olmadığını kontrol edin.' })
+            return controller.close()
+          }
+
+          send({ type: 'status', message: 'Kütüphane listesi taranıyor...' })
+          const gamesTabUrl = `${baseUrl}games/?tab=all`
+          const [apiG, xmlG, scrapeG] = await Promise.all([
             apiKey?.trim() ? fetchOwnedGamesViaAPI(pInfo.steamId, apiKey.trim()).catch(() => []) : Promise.resolve([]),
-            fetchGamesFromXML(pInfo.steamId)
+            fetchGamesFromXML(baseUrl).catch(() => []),
+            fetchPageHtml(gamesTabUrl).then(html => parseSteamGamesPage(html)).catch(() => [])
           ])
 
-          send({ type: 'status', message: 'Rozetler taranıyor (Sonsuz Tarama)...' })
+          send({ type: 'status', message: 'Rozetler taranıyor...' })
           const badgeG: any[] = []
-          for (let p = 1; p <= 50; p++) {
+          for (let p = 1; p <= 40; p++) {
             const pageHtml = await fetchPageHtml(`${baseUrl}badges/?p=${p}`).catch(() => '')
             if (!pageHtml) break
             const pageGames = parseBadgesPage(pageHtml)
             if (pageGames.length === 0) break
-            let newFound = 0
+            let newCount = 0
             pageGames.forEach(pg => {
-              if (!badgeG.some(eg => eg.appId === pg.appId)) { badgeG.push(pg); newFound++ }
+              if (!badgeG.some(eg => eg.appId === pg.appId)) { badgeG.push(pg); newCount++ }
             })
-            send({ type: 'status', message: `Rozetler taranıyor: Sayfa ${p} (${badgeG.length} oyun)...` })
-            if (newFound === 0) break
+            if (newCount === 0 && p > 1) break
+            send({ type: 'status', message: `Rozetler: Sayfa ${p} (${badgeG.length} oyun)...` })
           }
 
           const lib = new Map()
           apiG.forEach((g: any) => lib.set(g.appId, g.gameName))
           xmlG.forEach((g: any) => lib.set(g.appId, g.gameName))
+          scrapeG.forEach((g: any) => lib.set(g.appId, g.gameName))
           badgeG.forEach((g: any) => lib.set(g.appId, g.gameName))
 
           const rawIds = Array.from(lib.keys())
-          send({ type: 'status', message: `${rawIds.length} oyun kütüphaneden çekildi. Filtreleniyor...` })
+          console.log(`[Discovery] API:${apiG.length} XML:${xmlG.length} Scrape:${scrapeG.length} Badge:${badgeG.length} Unique:${rawIds.length}`)
 
+          if (rawIds.length === 0) {
+            send({ type: 'error', message: 'Kütüphanenizde oyun bulunamadı. Lütfen profilinizin ve oyun detaylarınızın HERKESE AÇIK (Public) olduğundan emin olun.' })
+            return controller.close()
+          }
+
+          send({ type: 'status', message: `${rawIds.length} oyun keşfedildi. Kart filtreleri uygulanıyor...` })
           const { confirmed, delisted } = await bulkCheckGamesForCards(rawIds)
           const candidates = [...confirmed, ...delisted].map(id => ({ appId: id, gameName: lib.get(id) || `Game ${id}` }))
 
-          console.log(`[Discovery] Unique Library: ${rawIds.length}, Potential Card Games: ${candidates.length}`)
-          send({ type: 'status', message: `${candidates.length} kartlı oyun fiyatları taranacak...` })
+          send({ type: 'status', message: `${candidates.length} potansiyel oyunun fiyatları çekilecek...` })
 
-          const gameCards: any[] = []
+          let gameCards: any[] = []
           let failedQueue: any[] = []
           let curDelay = 200
 
           const scanList = async (list: any[], isRetry = false) => {
             for (let i = 0; i < list.length; i++) {
               const game = list[i]
-              // Cooldown 10s every 25 calls
               if (i > 0 && i % 25 === 0) {
-                send({ type: 'status', message: 'IP Limiti bekleniyor (10s)...' })
+                send({ type: 'status', message: `Steam IP Limiti Bekleniyor... (${Math.round((list.length - i) / 25 * 10)}s kaldı)` })
                 await new Promise(r => setTimeout(r, 10000))
               } else if (i > 0) { await new Promise(r => setTimeout(r, curDelay)) }
 
@@ -272,7 +313,7 @@ export async function POST(request: NextRequest) {
 
           await scanList(candidates)
           if (failedQueue.length > 0) {
-            console.log(`[Retry] Starting second pass for ${failedQueue.length} games...`)
+            console.log(`[Retry] Pass 2 for ${failedQueue.length} games...`)
             await new Promise(r => setTimeout(r, 12000))
             await scanList(failedQueue, true)
           }
@@ -280,9 +321,20 @@ export async function POST(request: NextRequest) {
           gameCards.sort((a, b) => b.droppableCardsValue - a.droppableCardsValue)
           send({ type: 'complete', data: { profile: pInfo, games: gameCards } })
           controller.close()
-        } catch (err) { console.error(err); send({ type: 'error', message: 'Hata oluştu.' }); controller.close() }
+        } catch (err) {
+          console.error(err)
+          send({ type: 'error', message: 'Hata oluştu. Profilinizin gizlilik ayarlarını kontrol edin.' })
+          controller.close()
+        }
       }
     })
-    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } })
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive'
+      }
+    })
   } catch (e) { return new Response(JSON.stringify({ error: 'internal error' }), { status: 500 }) }
 }
